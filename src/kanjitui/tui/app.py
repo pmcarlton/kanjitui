@@ -5,6 +5,8 @@ import sqlite3
 
 from kanjitui.db import query as db_query
 from kanjitui.search.query import SearchEngine
+from kanjitui.tui.navigation import build_strip, move_grid_index
+from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
 from kanjitui.tui.router import KeyRouter
 
 
@@ -34,7 +36,9 @@ class TuiApp:
         self.search_idx = 0
 
         self.radical_open = False
-        self.radicals = db_query.radical_counts(conn)
+        self.radical_counts = dict(db_query.radical_counts(conn))
+        self.radical_numbers = all_kangxi_radical_numbers()
+        self.radical_grid_cols = 14
         self.radical_idx = 0
         self.radical_results: list[int] | None = None
         self.radical_result_idx = 0
@@ -193,13 +197,27 @@ class TuiApp:
 
         if self.radical_results is None:
             if key in (curses.KEY_UP, ord("k")):
-                self.radical_idx = max(0, self.radical_idx - 1)
+                self.radical_idx = move_grid_index(
+                    self.radical_idx, len(self.radical_numbers), self.radical_grid_cols, "up"
+                )
                 return True
             if key in (curses.KEY_DOWN, ord("j")):
-                self.radical_idx = min(len(self.radicals) - 1, self.radical_idx + 1)
+                self.radical_idx = move_grid_index(
+                    self.radical_idx, len(self.radical_numbers), self.radical_grid_cols, "down"
+                )
                 return True
-            if key in (10, 13, curses.KEY_ENTER) and self.radicals:
-                radical = self.radicals[self.radical_idx][0]
+            if key in (curses.KEY_LEFT,):
+                self.radical_idx = move_grid_index(
+                    self.radical_idx, len(self.radical_numbers), self.radical_grid_cols, "left"
+                )
+                return True
+            if key in (curses.KEY_RIGHT,):
+                self.radical_idx = move_grid_index(
+                    self.radical_idx, len(self.radical_numbers), self.radical_grid_cols, "right"
+                )
+                return True
+            if key in (10, 13, curses.KEY_ENTER) and self.radical_numbers:
+                radical = self.radical_numbers[self.radical_idx]
                 self.radical_results = db_query.cps_by_radical(self.conn, radical)
                 self.radical_result_idx = 0
                 self.message = f"Radical {radical}: {len(self.radical_results)} chars"
@@ -283,7 +301,7 @@ class TuiApp:
                     y += 1
             y += 1
 
-        if self.show_cn and y < h - 4:
+        if self.show_cn and y < h - 5:
             attr = curses.A_REVERSE if self.focus == "cn" else 0
             self._safe_add(stdscr, y, 0, "CN", attr)
             y += 1
@@ -313,12 +331,13 @@ class TuiApp:
                     y += 1
             y += 1
 
-        if self.show_variants and y < h - 3:
+        if self.show_variants and y < h - 4:
             vars_text = ", ".join(
                 f"{kind}->U+{target:04X}" for kind, target, _ in detail["variants"][:8]
             ) or "(none)"
             self._safe_add(stdscr, y, 0, f"Variants: {vars_text}")
 
+        self._render_nav_strip(stdscr, h - 2)
         status = (
             "Arrows/jk:move Tab:focus O:order /:search r:radical 1/2/v:toggle ?:help q:quit | "
             f"{self.message}"
@@ -394,19 +413,41 @@ class TuiApp:
             self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
 
         if self.radical_results is None:
-            self._safe_add(stdscr, top + 1, left + 2, "Radicals (Enter to select)", curses.A_REVERSE)
-            max_rows = box_h - 3
-            start = max(0, self.radical_idx - max_rows + 1)
-            for offset, (radical, count) in enumerate(self.radicals[start : start + max_rows]):
-                idx = start + offset
-                marker = ">" if idx == self.radical_idx else " "
-                self._safe_add(
-                    stdscr,
-                    top + 2 + offset,
-                    left + 2,
-                    f"{marker} radical {radical:3d}  ({count} chars)",
-                    curses.A_REVERSE,
-                )
+            self._safe_add(
+                stdscr,
+                top + 1,
+                left + 2,
+                "Radicals (Arrow keys in table, Enter select)",
+                curses.A_REVERSE,
+            )
+            rows = max(1, box_h - 4)
+            cols = max(1, min(self.radical_grid_cols, max(1, (box_w - 4) // 9)))
+            self.radical_grid_cols = cols
+            selected_row = self.radical_idx // cols
+            start_row = max(0, selected_row - rows + 1)
+            end_row = start_row + rows
+            for row in range(start_row, end_row):
+                y = top + 2 + (row - start_row)
+                for col in range(cols):
+                    idx = row * cols + col
+                    if idx >= len(self.radical_numbers):
+                        break
+                    radical_num = self.radical_numbers[idx]
+                    glyph = kangxi_radical_glyph(radical_num)
+                    count = self.radical_counts.get(radical_num, 0)
+                    cell = f"{glyph}{radical_num:03d}:{count:02d}"
+                    x = left + 2 + col * 9
+                    attr = curses.A_REVERSE | (curses.A_BOLD if idx == self.radical_idx else 0)
+                    self._safe_add(stdscr, y, x, cell, attr)
+            selected_radical = self.radical_numbers[self.radical_idx]
+            selected_count = self.radical_counts.get(selected_radical, 0)
+            self._safe_add(
+                stdscr,
+                top + box_h - 1,
+                left + 2,
+                f"Selected radical {selected_radical} {kangxi_radical_glyph(selected_radical)} ({selected_count} chars)",
+                curses.A_REVERSE,
+            )
             return
 
         self._safe_add(stdscr, top + 1, left + 2, "Radical results (Enter jump, Backspace back)", curses.A_REVERSE)
@@ -422,6 +463,24 @@ class TuiApp:
                 f"{marker} {chr(cp)} U+{cp:04X}",
                 curses.A_REVERSE,
             )
+
+    def _render_nav_strip(self, stdscr: curses.window, y: int) -> None:
+        h, w = stdscr.getmaxyx()
+        if y < 0 or y >= h:
+            return
+        strip = build_strip(self.ordered_cps, self.pos, radius=10)
+        cell_width = 2
+        total_width = len(strip) * cell_width
+        start_x = max(0, (w - total_width) // 2)
+        for idx, cell in enumerate(strip):
+            x = start_x + idx * cell_width
+            text = "· "
+            if cell.cp is not None:
+                text = f"{chr(cell.cp)} "
+            attr = curses.A_BOLD if cell.is_current else curses.A_DIM
+            if cell.is_current:
+                attr |= curses.A_REVERSE
+            self._safe_add(stdscr, y, x, text, attr)
 
 
 def run_tui(conn: sqlite3.Connection) -> None:
