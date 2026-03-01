@@ -114,6 +114,12 @@ kanjitui --build \
 Sentence TSV format (tab-separated):
 `cp_hex\tlang\ttext\treading\tgloss\tsource\tlicense`
 
+To generate `data/raw/sentences.tsv` automatically from Tatoeba exports:
+
+```bash
+make build-sentences
+```
+
 ## Data Layout
 
 - `data/db.sqlite`: built SQLite database
