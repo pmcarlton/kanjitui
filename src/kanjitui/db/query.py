@@ -160,7 +160,7 @@ def get_components(conn: sqlite3.Connection, cp: int) -> list[tuple[int, str]]:
         SELECT cmp.component_cp, COALESCE(c2.ch, '')
         FROM components cmp
         LEFT JOIN chars c2 ON c2.cp = cmp.component_cp
-        WHERE cp = ?
+        WHERE cmp.cp = ?
         ORDER BY cmp.component_cp
         """,
         (cp,),
@@ -210,6 +210,15 @@ def get_sentences(conn: sqlite3.Connection, cp: int, limit: int = 5) -> list[tup
         (cp, limit),
     ).fetchall()
     return [tuple(row) for row in rows]
+
+
+def derived_data_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    tables = ["field_provenance", "phonetic_series", "sentences", "components", "frequency_scores"]
+    counts: dict[str, int] = {}
+    for table in tables:
+        rows = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+        counts[table] = int(rows[0]) if rows is not None else 0
+    return counts
 
 
 def _search_char_exact(conn: sqlite3.Connection, token: str, limit: int, normalizer: NormalizerPlugin) -> list[dict]:

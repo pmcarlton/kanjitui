@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import logging
+import sqlite3
 import sys
 
 from kanjitui import __version__
@@ -131,6 +132,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Build error: {exc}", file=sys.stderr)
             print("Place source files and rerun with --build.", file=sys.stderr)
             return 2
+        except sqlite3.OperationalError as exc:
+            if "database is locked" in str(exc).lower():
+                print(f"Build error: {exc}", file=sys.stderr)
+                print(
+                    "Target DB is locked. Close running kanjitui instances or build to a different --db path.",
+                    file=sys.stderr,
+                )
+                return 2
+            raise
 
         LOGGER.info("build_summary", extra=counts)
         print(

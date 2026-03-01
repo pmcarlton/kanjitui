@@ -9,6 +9,7 @@ from kanjitui.search.normalize import contains_cjk
 
 UNI_LINE_RE = re.compile(r"^U\+([0-9A-F]{4,6})\t([^\t]+)\t(.+)$")
 CP_RE = re.compile(r"U\+([0-9A-F]{4,6})")
+DIGIT_RE = re.compile(r"\d+")
 
 VARIANT_FIELDS = {
     "kTraditionalVariant": "traditional",
@@ -92,6 +93,8 @@ def parse_unihan_dir(unihan_dir: Path) -> dict[int, CharAnnotations]:
                 for ch in raw:
                     if contains_cjk(ch):
                         record.phonetics.append(ord(ch))
+                for digit_match in DIGIT_RE.finditer(raw):
+                    record.phonetics.append(int(digit_match.group(0)))
 
     for record in data.values():
         record.jp_on = sorted(set(record.jp_on))

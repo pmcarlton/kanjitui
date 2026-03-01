@@ -458,9 +458,19 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                         (cp, component_cp, "ids", "unihan"),
                     )
                     add_provenance("component", f"U+{component_cp:04X}", "unihan", 0.70)
+                if not record.components and record.radical is not None and 1 <= record.radical <= 214:
+                    radical_cp = 0x2F00 + record.radical - 1
+                    conn.execute(
+                        "INSERT INTO components(cp, component_cp, kind, source) VALUES(?,?,?,?)",
+                        (cp, radical_cp, "radical", "unihan"),
+                    )
+                    add_provenance("component", f"U+{radical_cp:04X}", "unihan", 0.65)
 
                 for phonetic_cp in record.phonetics:
-                    series_key = f"U+{phonetic_cp:04X}"
+                    if phonetic_cp >= 0x3400:
+                        series_key = f"U+{phonetic_cp:04X}"
+                    else:
+                        series_key = f"PHON:{phonetic_cp}"
                     conn.execute(
                         "INSERT INTO phonetic_series(series_key, cp, source) VALUES(?,?,?)",
                         (series_key, cp, "unihan"),

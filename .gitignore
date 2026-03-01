@@ -3,7 +3,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 data/raw/
-data/db.sqlite
-data/user.sqlite
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 data/font_profile.json
 data/build_report.json

@@ -29,6 +29,7 @@ class TuiApp:
         self.bookmarked_cps: set[int] = set()
         if self.user_store is not None:
             self.bookmarked_cps = {cp for cp, _ in self.user_store.list_bookmarks(limit=1000)}
+        self.derived_counts = db_query.derived_data_counts(conn)
 
         self.focus = "jp"
         self.ordering_idx = 0
@@ -50,6 +51,8 @@ class TuiApp:
         self.show_phonetic = False
 
         self.message = "Ready"
+        if self.derived_counts.get("field_provenance", 0) == 0:
+            self.message = "DB missing derived rows (run --build to populate phase C/D features)"
 
         self.search_open = False
         self.search_input = ""
@@ -538,7 +541,10 @@ class TuiApp:
             y += 1
             sentence_rows = db_query.get_sentences(self.conn, detail["cp"], limit=3)
             if not sentence_rows:
-                self._safe_add(stdscr, y, 2, "(no sentence examples)")
+                hint = "(no sentence examples)"
+                if self.derived_counts.get("sentences", 0) == 0:
+                    hint = "(no sentence examples; add sentences provider and rebuild DB)"
+                self._safe_add(stdscr, y, 2, hint)
                 y += 1
             else:
                 for lang, text, reading, gloss, source, license_name, rank in sentence_rows:
@@ -743,7 +749,10 @@ class TuiApp:
         rows = db_query.get_provenance(self.conn, cp, limit=box_h - 3)
         self._safe_add(stdscr, top + 1, left + 2, "Provenance (p to close)", curses.A_REVERSE)
         if not rows:
-            self._safe_add(stdscr, top + 2, left + 2, "(no provenance rows)", curses.A_REVERSE)
+            hint = "(no provenance rows)"
+            if self.derived_counts.get("field_provenance", 0) == 0:
+                hint = "(no provenance rows; rebuild DB with current builder)"
+            self._safe_add(stdscr, top + 2, left + 2, hint, curses.A_REVERSE)
             return
         for idx, (field, value, source, conf) in enumerate(rows):
             text = f"{field}: {value} [{source} {conf:.2f}]"
@@ -759,6 +768,7 @@ class TuiApp:
             self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
 
         graph = db_query.variant_graph(self.conn, cp, depth=2, max_nodes=32)
+        node_map = {node_cp: node_ch for node_cp, node_ch in graph["nodes"]}
         self._safe_add(stdscr, top + 1, left + 2, "Variant graph (g to close)", curses.A_REVERSE)
         self._safe_add(
             stdscr,
@@ -769,7 +779,9 @@ class TuiApp:
         )
         max_rows = box_h - 4
         for idx, (src, kind, dst) in enumerate(graph["edges"][:max_rows]):
-            text = f"U+{src:04X} -{kind}-> U+{dst:04X}"
+            src_ch = node_map.get(src, chr(src))
+            dst_ch = node_map.get(dst, chr(dst))
+            text = f"{src_ch} U+{src:04X} -{kind}-> {dst_ch} U+{dst:04X}"
             self._safe_add(stdscr, top + 3 + idx, left + 2, text, curses.A_REVERSE)
 
     def _render_components_overlay(self, stdscr: curses.window, cp: int) -> None:
@@ -783,7 +795,10 @@ class TuiApp:
         self._safe_add(stdscr, top + 1, left + 2, "Components (c to close)", curses.A_REVERSE)
         components = db_query.get_components(self.conn, cp)
         if not components:
-            self._safe_add(stdscr, top + 2, left + 2, "(no components)", curses.A_REVERSE)
+            hint = "(no components)"
+            if self.derived_counts.get("components", 0) == 0:
+                hint = "(no components rows; rebuild DB with current builder)"
+            self._safe_add(stdscr, top + 2, left + 2, hint, curses.A_REVERSE)
             return
         for idx, (comp_cp, comp_ch) in enumerate(components[: box_h - 3]):
             text = f"{idx + 1}. {comp_ch} U+{comp_cp:04X}"
@@ -800,7 +815,10 @@ class TuiApp:
         self._safe_add(stdscr, top + 1, left + 2, "Phonetic series (s to close)", curses.A_REVERSE)
         series_rows = db_query.get_phonetic_series(self.conn, cp, limit=box_h - 3)
         if not series_rows:
-            self._safe_add(stdscr, top + 2, left + 2, "(no phonetic series rows)", curses.A_REVERSE)
+            hint = "(no phonetic series rows)"
+            if self.derived_counts.get("phonetic_series", 0) == 0:
+                hint = "(no phonetic rows; rebuild DB with current builder)"
+            self._safe_add(stdscr, top + 2, left + 2, hint, curses.A_REVERSE)
             return
         for idx, (member_cp, member_ch, key) in enumerate(series_rows[: box_h - 3]):
             text = f"{idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"

@@ -2,7 +2,13 @@ from pathlib import Path
 
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db.query import connect, get_char_detail, get_provenance, search, variant_graph
-from kanjitui.db.query import available_frequency_profiles, get_sentences, stroke_options_by_radical
+from kanjitui.db.query import (
+    available_frequency_profiles,
+    derived_data_counts,
+    get_components,
+    get_sentences,
+    stroke_options_by_radical,
+)
 from kanjitui.search.normalizer import get_normalizer
 
 
@@ -55,6 +61,13 @@ def test_build_and_query_roundtrip(tmp_path: Path) -> None:
 
         stroke_opts = stroke_options_by_radical(conn, 85)
         assert 13 in stroke_opts
+
+        components = get_components(conn, 0x6F22)
+        assert isinstance(components, list)
+        assert len(components) >= 1
+
+        derived = derived_data_counts(conn)
+        assert derived["field_provenance"] > 0
     finally:
         conn.close()
 
