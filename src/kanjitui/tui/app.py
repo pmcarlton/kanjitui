@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import curses
 import sqlite3
+import webbrowser
 
 from kanjitui.db import query as db_query
+from kanjitui.db.user import UserStore
 from kanjitui.search.query import SearchEngine
+from kanjitui.tui.imagelinks import ImageLink, cc_image_links
 from kanjitui.tui.navigation import build_strip, move_grid_index
 from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
 from kanjitui.tui.router import KeyRouter
@@ -14,9 +17,18 @@ ORDERINGS = ["freq", "radical", "reading", "codepoint"]
 
 
 class TuiApp:
-    def __init__(self, conn: sqlite3.Connection, normalizer_name: str = "default") -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        normalizer_name: str = "default",
+        user_store: UserStore | None = None,
+    ) -> None:
         self.conn = conn
         self.search_engine = SearchEngine(conn, normalizer_name=normalizer_name)
+        self.user_store = user_store
+        self.bookmarked_cps: set[int] = set()
+        if self.user_store is not None:
+            self.bookmarked_cps = {cp for cp, _ in self.user_store.list_bookmarks(limit=1000)}
 
         self.focus = "jp"
         self.ordering_idx = 0
@@ -43,6 +55,12 @@ class TuiApp:
         self.search_input = ""
         self.search_results: list[dict] = []
         self.search_idx = 0
+        self.note_input_open = False
+        self.note_input_text = ""
+        self.show_user_overlay = False
+        self.image_panel_open = False
+        self.image_links: list[ImageLink] = []
+        self.image_idx = 0
 
         self.radical_open = False
         self.radical_counts = dict(db_query.radical_counts(conn))
@@ -58,6 +76,8 @@ class TuiApp:
         self.router = KeyRouter(self._current_mode, self._handle_normal_key)
         self.router.register("search", self._handle_search_key)
         self.router.register("radical", self._handle_radical_key)
+        self.router.register("note", self._handle_note_key)
+        self.router.register("image", self._handle_image_key)
 
     @property
     def current_cp(self) -> int | None:
@@ -107,6 +127,10 @@ class TuiApp:
             return "search"
         if self.radical_open:
             return "radical"
+        if self.note_input_open:
+            return "note"
+        if self.image_panel_open:
+            return "image"
         return "normal"
 
     def _handle_key(self, key: int) -> bool:
@@ -186,6 +210,38 @@ class TuiApp:
             if self.show_phonetic:
                 self.show_components = False
             return True
+        if key in (ord("b"), ord("B")):
+            cp = self.current_cp
+            if cp is None or self.user_store is None:
+                self.message = "User workspace unavailable"
+                return True
+            bookmarked = self.user_store.toggle_bookmark(cp)
+            if bookmarked:
+                self.bookmarked_cps.add(cp)
+            else:
+                self.bookmarked_cps.discard(cp)
+            self.message = (
+                f"Bookmarked U+{cp:04X}" if bookmarked else f"Removed bookmark U+{cp:04X}"
+            )
+            return True
+        if key in (ord("n"), ord("N")):
+            if self.user_store is None:
+                self.message = "User workspace unavailable"
+                return True
+            self.note_input_open = True
+            self.note_input_text = ""
+            return True
+        if key in (ord("u"), ord("U")):
+            self.show_user_overlay = not self.show_user_overlay
+            return True
+        if key in (ord("i"), ord("I")):
+            cp = self.current_cp
+            if cp is None:
+                return True
+            self.image_panel_open = True
+            self.image_idx = 0
+            self.image_links = cc_image_links(chr(cp), cp)
+            return True
         if key == ord("?"):
             self.show_help = not self.show_help
             return True
@@ -236,6 +292,8 @@ class TuiApp:
                 return True
 
             self.search_results = self.search_engine.run(self.search_input, limit=200)
+            if self.user_store is not None:
+                self.user_store.save_query(self.search_input)
             self.search_idx = 0
             self.message = f"{len(self.search_results)} results"
             return True
@@ -340,6 +398,47 @@ class TuiApp:
 
         return True
 
+    def _handle_note_key(self, key: int) -> bool | None:
+        if key == 27:  # Esc
+            self.note_input_open = False
+            self.note_input_text = ""
+            self.message = "Cancelled note entry"
+            return True
+        if key in (curses.KEY_BACKSPACE, 127, 8):
+            self.note_input_text = self.note_input_text[:-1]
+            return True
+        if key in (10, 13, curses.KEY_ENTER):
+            cp = self.current_cp
+            if cp is not None and self.user_store is not None and self.note_input_text.strip():
+                self.user_store.add_note(cp, self.note_input_text)
+                self.message = f"Saved note for U+{cp:04X}"
+            self.note_input_open = False
+            self.note_input_text = ""
+            return True
+        if 32 <= key < 127:
+            self.note_input_text += chr(key)
+            return True
+        return True
+
+    def _handle_image_key(self, key: int) -> bool | None:
+        if key in (27, ord("i"), ord("I")):
+            self.image_panel_open = False
+            self.message = "Closed image links"
+            return True
+        if key in (curses.KEY_UP, ord("k")) and self.image_links:
+            self.image_idx = max(0, self.image_idx - 1)
+            return True
+        if key in (curses.KEY_DOWN, ord("j")) and self.image_links:
+            self.image_idx = min(len(self.image_links) - 1, self.image_idx + 1)
+            return True
+        if key in (ord("o"), ord("O"), 10, 13, curses.KEY_ENTER):
+            if self.image_links:
+                target = self.image_links[self.image_idx]
+                webbrowser.open(target.url)
+                self.message = f"Opened: {target.label}"
+            return True
+        return True
+
     def _safe_add(self, stdscr: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
         h, w = stdscr.getmaxyx()
         if y < 0 or y >= h:
@@ -370,8 +469,11 @@ class TuiApp:
         order_label = ORDERINGS[self.ordering_idx]
         if order_label == "freq" and self.current_freq_profile:
             order_label = f"freq:{self.current_freq_profile}"
+        bookmark_marker = ""
+        if detail["cp"] in self.bookmarked_cps:
+            bookmark_marker = " ★"
         header = (
-            f"{detail['ch']} U+{detail['cp']:04X}  radical {detail['radical'] or '-'}  "
+            f"{detail['ch']}{bookmark_marker} U+{detail['cp']:04X}  radical {detail['radical'] or '-'}  "
             f"strokes {detail['strokes'] or '-'}  [{self.focus.upper()} focus] "
             f"({idx}/{total}) order:{order_label}"
         )
@@ -460,7 +562,7 @@ class TuiApp:
 
         self._render_nav_strip(stdscr, h - 2)
         status = (
-            "Arrows/jk:move Tab:focus O/F:order /:search r:radical 1/2/3/v:toggle c/s/p/g overlays ?:help q:quit | "
+            "Arrows/jk:move Tab:focus O/F:order /:search r:radical 1/2/3/v c/s/p/g b/n/u/i ?:help q:quit | "
             f"{self.message}"
         )
         self._safe_add(stdscr, h - 1, 0, status, curses.A_REVERSE)
@@ -475,6 +577,12 @@ class TuiApp:
             self._render_components_overlay(stdscr, detail["cp"])
         if self.show_phonetic:
             self._render_phonetic_overlay(stdscr, detail["cp"])
+        if self.show_user_overlay:
+            self._render_user_overlay(stdscr, detail["cp"])
+        if self.note_input_open:
+            self._render_note_input_overlay(stdscr)
+        if self.image_panel_open:
+            self._render_image_overlay(stdscr)
         if self.search_open:
             self._render_search_overlay(stdscr)
         if self.radical_open:
@@ -493,6 +601,7 @@ class TuiApp:
             "r radical browser, 1/2 pane toggle, v variants",
             "3 sentences, c components, s phonetic series",
             "p provenance, g variant graph, ? help, q quit",
+            "b bookmark, n note, u user overlay, i image links panel",
             "Data: Unicode Unihan, EDRDG KANJIDIC2/JMdict, CC-CEDICT",
             "License details: data/licenses/",
         ]
@@ -697,7 +806,96 @@ class TuiApp:
             text = f"{idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             self._safe_add(stdscr, top + 2 + idx, left + 2, text, curses.A_REVERSE)
 
+    def _render_user_overlay(self, stdscr: curses.window, cp: int) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(16, h - 2)
+        top = max(1, (h - box_h) // 2)
+        left = 1
+        box_w = w - 2
+        for y in range(top, top + box_h):
+            self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "User workspace (u to close)", curses.A_REVERSE)
+        if self.user_store is None:
+            self._safe_add(stdscr, top + 2, left + 2, "(user store unavailable)", curses.A_REVERSE)
+            return
+        notes = self.user_store.get_notes(cp, limit=4)
+        bookmarks = self.user_store.list_bookmarks(limit=6)
+        queries = self.user_store.recent_queries(limit=4)
+        self._safe_add(stdscr, top + 2, left + 2, "Notes:", curses.A_REVERSE)
+        y = top + 3
+        if not notes:
+            self._safe_add(stdscr, y, left + 4, "(none)", curses.A_REVERSE)
+            y += 1
+        else:
+            for note in notes:
+                self._safe_add(stdscr, y, left + 4, f"- {note}", curses.A_REVERSE)
+                y += 1
+        self._safe_add(stdscr, y, left + 2, "Bookmarks:", curses.A_REVERSE)
+        y += 1
+        if not bookmarks:
+            self._safe_add(stdscr, y, left + 4, "(none)", curses.A_REVERSE)
+            y += 1
+        else:
+            for bcp, tag in bookmarks[:3]:
+                self._safe_add(
+                    stdscr,
+                    y,
+                    left + 4,
+                    f"- {chr(bcp)} U+{bcp:04X} {f'[{tag}]' if tag else ''}",
+                    curses.A_REVERSE,
+                )
+                y += 1
+        self._safe_add(stdscr, y, left + 2, "Recent queries:", curses.A_REVERSE)
+        y += 1
+        if not queries:
+            self._safe_add(stdscr, y, left + 4, "(none)", curses.A_REVERSE)
+        else:
+            for query in queries[:3]:
+                self._safe_add(stdscr, y, left + 4, f"- {query}", curses.A_REVERSE)
+                y += 1
 
-def run_tui(conn: sqlite3.Connection, normalizer_name: str = "default") -> None:
-    app = TuiApp(conn, normalizer_name=normalizer_name)
+    def _render_note_input_overlay(self, stdscr: curses.window) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = 5
+        top = h - box_h - 1
+        left = 1
+        box_w = w - 2
+        for y in range(top, top + box_h):
+            self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "Note (Enter save, Esc cancel):", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 2, left + 2, self.note_input_text, curses.A_REVERSE)
+
+    def _render_image_overlay(self, stdscr: curses.window) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(12, h - 2)
+        top = max(1, (h - box_h) // 2)
+        left = 1
+        box_w = w - 2
+        for y in range(top, top + box_h):
+            self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            "CC image links (Up/Down select, Enter/o open, i/Esc close)",
+            curses.A_REVERSE,
+        )
+        if not self.image_links:
+            self._safe_add(stdscr, top + 2, left + 2, "(no links)", curses.A_REVERSE)
+            return
+        max_rows = box_h - 4
+        for idx, link in enumerate(self.image_links[:max_rows]):
+            marker = ">" if idx == self.image_idx else " "
+            self._safe_add(stdscr, top + 2 + idx, left + 2, f"{marker} {link.label}", curses.A_REVERSE)
+        selected = self.image_links[self.image_idx]
+        self._safe_add(stdscr, top + box_h - 2, left + 2, f"Source: {selected.source}", curses.A_REVERSE)
+        self._safe_add(stdscr, top + box_h - 1, left + 2, selected.license_note, curses.A_REVERSE)
+
+
+def run_tui(
+    conn: sqlite3.Connection,
+    normalizer_name: str = "default",
+    user_store: UserStore | None = None,
+) -> None:
+    app = TuiApp(conn, normalizer_name=normalizer_name, user_store=user_store)
     curses.wrapper(app.run)

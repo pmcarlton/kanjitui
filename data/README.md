@@ -8,6 +8,7 @@ The build step expects source files in `data/raw/` by default.
 - `data/raw/kanjidic2.xml`
 - `data/raw/jmdict.xml`
 - `data/raw/cedict_ts.u8`
+- `data/raw/sentences.tsv` (optional; custom sentence examples provider)
 
 ## Fetch workflow
 

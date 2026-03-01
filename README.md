@@ -74,6 +74,10 @@ kanjitui --db data/db.sqlite
 - `g`: toggle variant-graph overlay
 - `c`: toggle component overlay
 - `s`: toggle phonetic-series overlay
+- `b`: toggle bookmark for current character
+- `n`: add a one-line note for current character
+- `u`: show user workspace overlay (notes/bookmarks/recent queries)
+- `i`: show CC-image links panel (`Enter`/`o` to open in browser)
 - `?`: help/attribution overlay
 - `q`: quit
 
@@ -113,7 +117,7 @@ Sentence TSV format (tab-separated):
 ## Data Layout
 
 - `data/db.sqlite`: built SQLite database
-- `data/user.sqlite`: user metadata database (groundwork for future features)
+- `data/user.sqlite`: user metadata database (bookmarks, notes, saved queries)
 - `data/font_profile.json`: optional coverage cache
 - `data/build_report.json`: build counts and exclusions
 

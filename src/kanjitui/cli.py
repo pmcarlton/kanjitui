@@ -11,6 +11,7 @@ from kanjitui.config import ConfigError, resolve_app_config, resolve_build_paths
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db import query as db_query
 from kanjitui.db.query import connect
+from kanjitui.db.user import UserStore
 from kanjitui.logging_utils import configure_logging
 from kanjitui.search.normalizer import get_normalizer
 from kanjitui.tui.app import run_tui
@@ -145,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     conn = connect(app_config.db_path)
+    user_store = UserStore(app_config.user_db_path)
     try:
         if args.export_char:
             cp = _parse_cp_token(args.export_char)
@@ -183,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
                 _export_csv(args.export_out, rows, ["cp", "ch", "jp", "cn", "gloss"])
             return 0
 
-        run_tui(conn, normalizer_name=app_config.normalizer)
+        run_tui(conn, normalizer_name=app_config.normalizer, user_store=user_store)
     except KeyboardInterrupt:
         return 0
     finally:
