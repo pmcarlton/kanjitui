@@ -1,0 +1,6 @@
+
+[build]
+fonttools>=4.0
+
+[test]
+pytest>=8.0

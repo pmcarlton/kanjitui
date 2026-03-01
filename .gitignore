@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+data/raw/
+data/db.sqlite
+data/font_profile.json
+data/build_report.json

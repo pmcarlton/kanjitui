@@ -1,0 +1,6 @@
+Unicode data files and software are subject to the Unicode Terms of Use.
+
+Primary reference:
+https://www.unicode.org/copyright.html
+
+The Unihan data used by this project should retain Unicode attribution and notice text.

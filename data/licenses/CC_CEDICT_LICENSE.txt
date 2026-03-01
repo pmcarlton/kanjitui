@@ -1,0 +1,6 @@
+CC-CEDICT is licensed under Creative Commons Attribution-ShareAlike (CC BY-SA).
+
+Primary reference:
+https://www.mdbg.net/chinese/dictionary?page=cc-cedict
+
+Use and redistribution of CC-CEDICT-derived data must preserve attribution and share-alike obligations.

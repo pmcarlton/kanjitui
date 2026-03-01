@@ -1,0 +1,6 @@
+KANJIDIC2 and JMdict are provided by The Electronic Dictionary Research and Development Group (EDRDG).
+
+Primary reference:
+http://www.edrdg.org/edrdg/licence.html
+
+Redistribution and usage must comply with EDRDG license terms and attribution requirements.

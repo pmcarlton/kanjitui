@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kanjitui"
+version = "0.1.0"
+description = "Terminal explorer for Japanese/Chinese Han character data"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "kanjitui contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+build = ["fonttools>=4.0"]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+kanjitui = "kanjitui.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

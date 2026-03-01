@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<JMdict>
+  <entry>
+    <ent_seq>1000010</ent_seq>
+    <k_ele>
+      <keb>漢字</keb>
+      <ke_pri>news1</ke_pri>
+    </k_ele>
+    <r_ele>
+      <reb>かんじ</reb>
+      <re_pri>news1</re_pri>
+    </r_ele>
+    <sense>
+      <gloss>Chinese character</gloss>
+    </sense>
+  </entry>
+  <entry>
+    <ent_seq>1000020</ent_seq>
+    <k_ele>
+      <keb>漢方</keb>
+    </k_ele>
+    <r_ele>
+      <reb>かんぽう</reb>
+    </r_ele>
+    <sense>
+      <gloss>Chinese herbal medicine</gloss>
+    </sense>
+  </entry>
+  <entry>
+    <ent_seq>1000030</ent_seq>
+    <k_ele>
+      <keb>文字</keb>
+      <ke_pri>ichi1</ke_pri>
+    </k_ele>
+    <r_ele>
+      <reb>もじ</reb>
+    </r_ele>
+    <sense>
+      <gloss>letter (of alphabet)</gloss>
+    </sense>
+  </entry>
+</JMdict>

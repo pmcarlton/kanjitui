@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kanjidic2>
+  <character>
+    <literal>漢</literal>
+    <radical>
+      <rad_value rad_type="classical">85</rad_value>
+    </radical>
+    <misc>
+      <grade>8</grade>
+      <stroke_count>13</stroke_count>
+      <freq>432</freq>
+    </misc>
+    <reading_meaning>
+      <rmgroup>
+        <reading r_type="ja_on">カン</reading>
+        <reading r_type="ja_kun">から</reading>
+        <meaning>China</meaning>
+        <meaning>Han</meaning>
+      </rmgroup>
+    </reading_meaning>
+  </character>
+  <character>
+    <literal>字</literal>
+    <radical>
+      <rad_value rad_type="classical">39</rad_value>
+    </radical>
+    <misc>
+      <stroke_count>6</stroke_count>
+      <freq>250</freq>
+    </misc>
+    <reading_meaning>
+      <rmgroup>
+        <reading r_type="ja_on">ジ</reading>
+        <meaning>character</meaning>
+      </rmgroup>
+    </reading_meaning>
+  </character>
+</kanjidic2>

@@ -1,0 +1,6 @@
+U+6F22	kRSUnicode	85.10
+U+6F22	kTotalStrokes	13
+U+5B57	kRSUnicode	39.3
+U+5B57	kTotalStrokes	6
+U+6C49	kRSUnicode	85.2
+U+6C49	kTotalStrokes	5

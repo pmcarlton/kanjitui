@@ -1,0 +1,101 @@
+Metadata-Version: 2.4
+Name: kanjitui
+Version: 0.1.0
+Summary: Terminal explorer for Japanese/Chinese Han character data
+Author: kanjitui contributors
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Provides-Extra: build
+Requires-Dist: fonttools>=4.0; extra == "build"
+Provides-Extra: test
+Requires-Dist: pytest>=8.0; extra == "test"
+
+# kanjitui
+
+Terminal explorer for a font-safe subset of Han characters with Japanese and Chinese readings, glosses, and example words.
+
+## Install
+
+1. Create a Python 3.11+ environment.
+2. Install the package in editable mode:
+
+```bash
+pip install -e .
+```
+
+Optional extras:
+
+```bash
+pip install -e .[build,test]
+```
+
+## Fetch Data
+
+```bash
+make fetch-data
+```
+
+This downloads Unihan and CC-CEDICT. For EDRDG sources, place:
+- `data/raw/kanjidic2.xml`
+- `data/raw/jmdict.xml`
+
+## Build Database
+
+```bash
+make build-db
+```
+
+Equivalent CLI:
+
+```bash
+kanjitui --build --data-dir data/raw --db data/db.sqlite
+```
+
+## Run TUI
+
+```bash
+make run
+```
+
+Equivalent CLI:
+
+```bash
+kanjitui --db data/db.sqlite
+```
+
+## Keybindings
+
+- `Right`/`Down`/`j`: next character
+- `Left`/`Up`/`k`: previous character
+- `Home`/`End`: first/last in ordering
+- `Tab`: switch JP/CN focus
+- `O`: cycle ordering (`freq` -> `radical` -> `reading` -> `codepoint`)
+- `/`: search overlay
+- `r`: radical browser overlay
+- `1`: toggle JP pane
+- `2`: toggle CN pane
+- `v`: toggle variants line
+- `?`: help/attribution overlay
+- `q`: quit
+
+## Search Syntax
+
+- direct character: `漢`
+- codepoint: `U+6F22` or `6F22`
+- kana: `かんじ` or `カンジ`
+- romaji (best effort): `kanji`
+- pinyin (tone marks or numbers): `hàn`, `han4`
+- meaning substring: `Chinese character`
+
+## Data Layout
+
+- `data/db.sqlite`: built SQLite database
+- `data/font_profile.json`: optional coverage cache
+- `data/build_report.json`: build counts and exclusions
+
+## Known Limitations (MVP)
+
+- Radical browser currently selects by radical number only (no stroke subfilter yet).
+- Romaji conversion uses a lightweight Hepburn-ish mapping.
+- Example-word ranking uses heuristics (not corpus frequencies).
+- If font coverage cannot be computed, build can run with no font filter.
