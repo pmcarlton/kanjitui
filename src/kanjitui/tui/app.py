@@ -455,40 +455,44 @@ class TuiApp:
             except curses.error:
                 return
 
-    def _draw_box(self, stdscr: curses.window, top: int, left: int, height: int, width: int, title: str = "") -> None:
+    def _draw_box(
+        self,
+        stdscr: curses.window,
+        top: int,
+        left: int,
+        height: int,
+        width: int,
+        title: str = "",
+        double: bool = False,
+    ) -> None:
         if height < 2 or width < 2:
             return
         right = left + width - 1
         bottom = top + height - 1
+        if double:
+            tl, hz, tr, vt, bl, br = "╔", "═", "╗", "║", "╚", "╝"
+        else:
+            tl, hz, tr, vt, bl, br = "┌", "─", "┐", "│", "└", "┘"
 
-        self._safe_add(stdscr, top, left, "┌" + ("─" * (width - 2)) + "┐", curses.A_REVERSE)
+        border_attr = curses.A_BOLD
+        self._safe_add(stdscr, top, left, tl + (hz * (width - 2)) + tr, border_attr)
         for y in range(top + 1, bottom):
-            self._safe_add(stdscr, y, left, "│", curses.A_REVERSE)
-            self._safe_add(stdscr, y, left + 1, " " * (width - 2), curses.A_REVERSE)
-            self._safe_add(stdscr, y, right, "│", curses.A_REVERSE)
-        self._safe_add(stdscr, bottom, left, "└" + ("─" * (width - 2)) + "┘", curses.A_REVERSE)
+            self._safe_add(stdscr, y, left, vt, border_attr)
+            self._safe_add(stdscr, y, left + 1, " " * (width - 2))
+            self._safe_add(stdscr, y, right, vt, border_attr)
+        self._safe_add(stdscr, bottom, left, bl + (hz * (width - 2)) + br, border_attr)
         if title and width > 6:
             banner = f" {title} "
-            self._safe_add(stdscr, top, left + 2, banner[: max(0, width - 4)], curses.A_REVERSE | curses.A_BOLD)
+            self._safe_add(stdscr, top, left + 2, banner[: max(0, width - 4)], curses.A_BOLD)
 
     def _render_section(self, stdscr: curses.window, y: int, width: int, title: str, lines: list[str], highlighted: bool = False) -> int:
-        inner_width = max(10, width - 2)
+        inner_width = max(10, width - 1)
         box_h = len(lines) + 2
-        if y + box_h >= stdscr.getmaxyx()[0] - 3:
+        if y + box_h >= stdscr.getmaxyx()[0] - 4:
             return y
-        self._safe_add(stdscr, y, 0, "┌" + ("─" * (inner_width - 2)) + "┐", curses.A_BOLD | (curses.A_REVERSE if highlighted else 0))
-        self._safe_add(
-            stdscr,
-            y,
-            2,
-            f" {title} "[: max(0, inner_width - 4)],
-            curses.A_BOLD | (curses.A_REVERSE if highlighted else 0),
-        )
+        self._draw_box(stdscr, y, 0, box_h, inner_width, title=title, double=highlighted)
         for idx, line in enumerate(lines):
-            self._safe_add(stdscr, y + 1 + idx, 0, "│")
             self._safe_add(stdscr, y + 1 + idx, 2, line[: max(0, inner_width - 4)])
-            self._safe_add(stdscr, y + 1 + idx, inner_width - 1, "│")
-        self._safe_add(stdscr, y + box_h - 1, 0, "└" + ("─" * (inner_width - 2)) + "┘")
         return y + box_h
 
     def _render(self, stdscr: curses.window) -> None:
@@ -516,19 +520,14 @@ class TuiApp:
         bookmark_marker = ""
         if detail["cp"] in self.bookmarked_cps:
             bookmark_marker = " ★"
+        focus_label = f"  reading-sort:{self.focus.upper()}" if ORDERINGS[self.ordering_idx] == "reading" else ""
         header = (
             f"{detail['ch']}{bookmark_marker} U+{detail['cp']:04X}  radical {detail['radical'] or '-'}  "
-            f"strokes {detail['strokes'] or '-'}  [{self.focus.upper()} focus] "
-            f"({idx}/{total}) order:{order_label}"
+            f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}"
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
-        menu_line = (
-            "┠ Nav:←/→/j/k Home End Tab  Search:/  Radical:r  Panes:1 2 3 v  "
-            "Overlays:c s p g u i  User:b n  Order:O F  Help:?  Quit:q"
-        )
-        self._safe_add(stdscr, 1, 0, menu_line)
 
-        y = 2
+        y = 1
         if self.show_jp:
             on = " ".join(detail["jp_on"]) if detail["jp_on"] else "(none)"
             kun = " ".join(detail["jp_kun"]) if detail["jp_kun"] else "(none)"
@@ -539,7 +538,8 @@ class TuiApp:
                 lines.append("  (no examples found)")
             else:
                 lines.extend([f"  {rank}. {word}  {kana or '-'}  {gloss or '-'}" for word, kana, gloss, rank in words[:5]])
-            y = self._render_section(stdscr, y, w, "JP", lines, highlighted=(self.focus == "jp")) + 1
+            jp_focus = ORDERINGS[self.ordering_idx] == "reading" and self.focus == "jp"
+            y = self._render_section(stdscr, y, w, "JP", lines, highlighted=jp_focus) + 1
 
         if self.show_cn and y < h - 5:
             if detail["cn_readings"]:
@@ -555,7 +555,8 @@ class TuiApp:
                 lines.extend(
                     [f"  {rank}. {trad}/{simp}  {marked} ({numbered})  {gloss}" for trad, simp, marked, numbered, gloss, rank in words[:5]]
                 )
-            y = self._render_section(stdscr, y, w, "CN", lines, highlighted=(self.focus == "cn")) + 1
+            cn_focus = ORDERINGS[self.ordering_idx] == "reading" and self.focus == "cn"
+            y = self._render_section(stdscr, y, w, "CN", lines, highlighted=cn_focus) + 1
 
         if self.show_sentences and y < h - 5:
             sentence_rows = db_query.get_sentences(self.conn, detail["cp"], limit=3)
@@ -578,12 +579,17 @@ class TuiApp:
             ) or "(none)"
             y = self._render_section(stdscr, y, w, "Variants", [vars_text])
 
+        menu_line = (
+            "Nav:←/→/j/k Home End Tab  Search:/  Radical:r  Panes:1 2 3 v  "
+            "Overlays:c s p g u i  User:b n  Order:O F  Help:?  Quit:q"
+        )
+        self._safe_add(stdscr, h - 3, 0, menu_line, curses.A_BOLD)
         self._render_nav_strip(stdscr, h - 2)
         status = (
             "Search: Shift-Up/Home=top  Shift-Down/End=bottom  Enter=jump | "
             f"{self.message}"
         )
-        self._safe_add(stdscr, h - 1, 0, status, curses.A_REVERSE)
+        self._safe_add(stdscr, h - 1, 0, status, curses.A_BOLD)
 
         if self.show_help:
             self._render_help(stdscr)
@@ -611,7 +617,7 @@ class TuiApp:
     def _render_help(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
         lines = [
-            "Navigation: ←/→/j/k, Home/End, Tab focus",
+            "Navigation: ←/→/j/k, Home/End, Tab reading-sort target",
             "Ordering: O cycle ordering, F cycle freq profile",
             "Search: / open, Enter run/jump, Shift-Up/Down jump top/bottom",
             "Radicals: r open, arrows move, Enter select, [/] stroke filter",
@@ -629,7 +635,7 @@ class TuiApp:
 
         self._draw_box(stdscr, top, left, box_h, box_w, title="Help")
         for i, line in enumerate(lines):
-            self._safe_add(stdscr, top + 1 + i, left + 2, line, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 1 + i, left + 2, line)
 
     def _render_search_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
@@ -640,19 +646,18 @@ class TuiApp:
 
         self._draw_box(stdscr, top, left, box_h, box_w, title="Search")
 
-        self._safe_add(stdscr, top + 1, left + 2, f"Query: {self.search_input}", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, f"Query: {self.search_input}")
         self._safe_add(
             stdscr,
             top + 2,
             left + 2,
             "Enter: run/jump  Esc: close  Up/Down: select  Shift-Up/Down or Home/End: top/bottom",
-            curses.A_REVERSE,
         )
 
         max_rows = box_h - 5
         start, end = visible_window(self.search_idx, len(self.search_results), max_rows)
         if not self.search_results and self.search_input:
-            self._safe_add(stdscr, top + 3, left + 2, "(press Enter to run search)", curses.A_REVERSE)
+            self._safe_add(stdscr, top + 3, left + 2, "(press Enter to run search)")
         for offset, row in enumerate(self.search_results[start:end]):
             idx = start + offset
             marker = "▶" if idx == self.search_idx else " "
@@ -660,14 +665,14 @@ class TuiApp:
                 f"{marker} {row['ch']} U+{row['cp']:04X}  JP:{row['jp']}  "
                 f"CN:{row['cn']}  {row['gloss']}"
             )
-            self._safe_add(stdscr, top + 3 + offset, left + 2, text, curses.A_REVERSE)
+            row_attr = curses.A_BOLD if idx == self.search_idx else 0
+            self._safe_add(stdscr, top + 3 + offset, left + 2, text, row_attr)
         if self.search_results:
             self._safe_add(
                 stdscr,
                 top + box_h - 2,
                 left + 2,
                 f"Result {self.search_idx + 1}/{len(self.search_results)}",
-                curses.A_REVERSE,
             )
 
     def _render_radical_overlay(self, stdscr: curses.window) -> None:
@@ -685,7 +690,6 @@ class TuiApp:
                 top + 1,
                 left + 2,
                 "Arrow keys move, Enter select",
-                curses.A_REVERSE,
             )
             rows = max(1, box_h - 4)
             cols = max(1, min(self.radical_grid_cols, max(1, (box_w - 4) // 4)))
@@ -703,10 +707,12 @@ class TuiApp:
                     glyph = kangxi_radical_glyph(radical_num)
                     cell = f" {glyph} "
                     x = left + 2 + col * 4
-                    attr = curses.A_REVERSE | (curses.A_BOLD if idx == self.radical_idx else 0)
+                    if idx == self.radical_idx:
+                        cell = f"┊{glyph}┊"
+                    attr = curses.A_BOLD if idx == self.radical_idx else 0
                     self._safe_add(stdscr, y, x, cell, attr)
             selected_radical = self.radical_numbers[self.radical_idx]
-            self._safe_add(stdscr, top + box_h - 2, left + 2, f"Selected: {kangxi_radical_glyph(selected_radical)}", curses.A_REVERSE)
+            self._safe_add(stdscr, top + box_h - 2, left + 2, f"Selected: {kangxi_radical_glyph(selected_radical)}", curses.A_BOLD)
             return
 
         stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
@@ -716,20 +722,14 @@ class TuiApp:
             top + 1,
             left + 2,
             f"Radical results (Enter jump, Backspace back, [/] strokes={stroke_label})",
-            curses.A_REVERSE,
         )
         max_rows = box_h - 3
         start = max(0, self.radical_result_idx - max_rows + 1)
         for offset, cp in enumerate(self.radical_results[start : start + max_rows]):
             idx = start + offset
             marker = ">" if idx == self.radical_result_idx else " "
-            self._safe_add(
-                stdscr,
-                top + 2 + offset,
-                left + 2,
-                f"{marker} {chr(cp)} U+{cp:04X}",
-                curses.A_REVERSE,
-            )
+            row_attr = curses.A_BOLD if idx == self.radical_result_idx else 0
+            self._safe_add(stdscr, top + 2 + offset, left + 2, f"{marker} {chr(cp)} U+{cp:04X}", row_attr)
 
     def _render_nav_strip(self, stdscr: curses.window, y: int) -> None:
         h, w = stdscr.getmaxyx()
@@ -758,16 +758,16 @@ class TuiApp:
         self._draw_box(stdscr, top, left, box_h, box_w, title="Provenance")
 
         rows = db_query.get_provenance(self.conn, cp, limit=box_h - 3)
-        self._safe_add(stdscr, top + 1, left + 2, "p closes overlay", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "p closes overlay")
         if not rows:
             hint = "(no provenance rows)"
             if self.derived_counts.get("field_provenance", 0) == 0:
                 hint = "(no provenance rows; rebuild DB with current builder)"
-            self._safe_add(stdscr, top + 2, left + 2, hint, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2, left + 2, hint)
             return
         for idx, (field, value, source, conf) in enumerate(rows):
             text = f"{field}: {value} [{source} {conf:.2f}]"
-            self._safe_add(stdscr, top + 2 + idx, left + 2, text, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2 + idx, left + 2, text)
 
     def _render_variant_graph_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
@@ -779,20 +779,19 @@ class TuiApp:
 
         graph = db_query.variant_graph(self.conn, cp, depth=2, max_nodes=32)
         node_map = {node_cp: node_ch for node_cp, node_ch in graph["nodes"]}
-        self._safe_add(stdscr, top + 1, left + 2, "g closes overlay", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "g closes overlay")
         self._safe_add(
             stdscr,
             top + 2,
             left + 2,
             f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}",
-            curses.A_REVERSE,
         )
         max_rows = box_h - 4
         for idx, (src, kind, dst) in enumerate(graph["edges"][:max_rows]):
             src_ch = node_map.get(src, chr(src))
             dst_ch = node_map.get(dst, chr(dst))
             text = f"{src_ch} U+{src:04X} -{kind}-> {dst_ch} U+{dst:04X}"
-            self._safe_add(stdscr, top + 3 + idx, left + 2, text, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 3 + idx, left + 2, text)
 
     def _render_components_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
@@ -801,17 +800,17 @@ class TuiApp:
         left = 1
         box_w = w - 2
         self._draw_box(stdscr, top, left, box_h, box_w, title="Components")
-        self._safe_add(stdscr, top + 1, left + 2, "c closes overlay", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "c closes overlay")
         components = db_query.get_components(self.conn, cp)
         if not components:
             hint = "(no components)"
             if self.derived_counts.get("components", 0) == 0:
                 hint = "(no components rows; rebuild DB with current builder)"
-            self._safe_add(stdscr, top + 2, left + 2, hint, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2, left + 2, hint)
             return
         for idx, (comp_cp, comp_ch) in enumerate(components[: box_h - 3]):
             text = f"{idx + 1}. {comp_ch} U+{comp_cp:04X}"
-            self._safe_add(stdscr, top + 2 + idx, left + 2, text, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2 + idx, left + 2, text)
 
     def _render_phonetic_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
@@ -820,17 +819,17 @@ class TuiApp:
         left = 1
         box_w = w - 2
         self._draw_box(stdscr, top, left, box_h, box_w, title="Phonetic Series")
-        self._safe_add(stdscr, top + 1, left + 2, "s closes overlay", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "s closes overlay")
         series_rows = db_query.get_phonetic_series(self.conn, cp, limit=box_h - 3)
         if not series_rows:
             hint = "(no phonetic series rows)"
             if self.derived_counts.get("phonetic_series", 0) == 0:
                 hint = "(no phonetic rows; rebuild DB with current builder)"
-            self._safe_add(stdscr, top + 2, left + 2, hint, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2, left + 2, hint)
             return
         for idx, (member_cp, member_ch, key) in enumerate(series_rows[: box_h - 3]):
             text = f"{idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
-            self._safe_add(stdscr, top + 2 + idx, left + 2, text, curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2 + idx, left + 2, text)
 
     def _render_user_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
@@ -839,26 +838,26 @@ class TuiApp:
         left = 1
         box_w = w - 2
         self._draw_box(stdscr, top, left, box_h, box_w, title="User Workspace")
-        self._safe_add(stdscr, top + 1, left + 2, "u closes overlay", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "u closes overlay")
         if self.user_store is None:
-            self._safe_add(stdscr, top + 2, left + 2, "(user store unavailable)", curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2, left + 2, "(user store unavailable)")
             return
         notes = self.user_store.get_notes(cp, limit=4)
         bookmarks = self.user_store.list_bookmarks(limit=6)
         queries = self.user_store.recent_queries(limit=4)
-        self._safe_add(stdscr, top + 2, left + 2, "Notes:", curses.A_REVERSE)
+        self._safe_add(stdscr, top + 2, left + 2, "Notes:")
         y = top + 3
         if not notes:
-            self._safe_add(stdscr, y, left + 4, "(none)", curses.A_REVERSE)
+            self._safe_add(stdscr, y, left + 4, "(none)")
             y += 1
         else:
             for note in notes:
-                self._safe_add(stdscr, y, left + 4, f"- {note}", curses.A_REVERSE)
+                self._safe_add(stdscr, y, left + 4, f"- {note}")
                 y += 1
-        self._safe_add(stdscr, y, left + 2, "Bookmarks:", curses.A_REVERSE)
+        self._safe_add(stdscr, y, left + 2, "Bookmarks:")
         y += 1
         if not bookmarks:
-            self._safe_add(stdscr, y, left + 4, "(none)", curses.A_REVERSE)
+            self._safe_add(stdscr, y, left + 4, "(none)")
             y += 1
         else:
             for bcp, tag in bookmarks[:3]:
@@ -867,16 +866,15 @@ class TuiApp:
                     y,
                     left + 4,
                     f"- {chr(bcp)} U+{bcp:04X} {f'[{tag}]' if tag else ''}",
-                    curses.A_REVERSE,
                 )
                 y += 1
-        self._safe_add(stdscr, y, left + 2, "Recent queries:", curses.A_REVERSE)
+        self._safe_add(stdscr, y, left + 2, "Recent queries:")
         y += 1
         if not queries:
-            self._safe_add(stdscr, y, left + 4, "(none)", curses.A_REVERSE)
+            self._safe_add(stdscr, y, left + 4, "(none)")
         else:
             for query in queries[:3]:
-                self._safe_add(stdscr, y, left + 4, f"- {query}", curses.A_REVERSE)
+                self._safe_add(stdscr, y, left + 4, f"- {query}")
                 y += 1
 
     def _render_note_input_overlay(self, stdscr: curses.window) -> None:
@@ -886,8 +884,8 @@ class TuiApp:
         left = 1
         box_w = w - 2
         self._draw_box(stdscr, top, left, box_h, box_w, title="Note")
-        self._safe_add(stdscr, top + 1, left + 2, "Note (Enter save, Esc cancel):", curses.A_REVERSE)
-        self._safe_add(stdscr, top + 2, left + 2, self.note_input_text, curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "Note (Enter save, Esc cancel):")
+        self._safe_add(stdscr, top + 2, left + 2, self.note_input_text)
 
     def _render_image_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
@@ -901,18 +899,18 @@ class TuiApp:
             top + 1,
             left + 2,
             "CC image links (Up/Down select, Enter/o open, i/Esc close)",
-            curses.A_REVERSE,
         )
         if not self.image_links:
-            self._safe_add(stdscr, top + 2, left + 2, "(no links)", curses.A_REVERSE)
+            self._safe_add(stdscr, top + 2, left + 2, "(no links)")
             return
         max_rows = box_h - 4
         for idx, link in enumerate(self.image_links[:max_rows]):
-            marker = ">" if idx == self.image_idx else " "
-            self._safe_add(stdscr, top + 2 + idx, left + 2, f"{marker} {link.label}", curses.A_REVERSE)
+            marker = "▶" if idx == self.image_idx else " "
+            row_attr = curses.A_BOLD if idx == self.image_idx else 0
+            self._safe_add(stdscr, top + 2 + idx, left + 2, f"{marker} {link.label}", row_attr)
         selected = self.image_links[self.image_idx]
-        self._safe_add(stdscr, top + box_h - 2, left + 2, f"Source: {selected.source}", curses.A_REVERSE)
-        self._safe_add(stdscr, top + box_h - 1, left + 2, selected.license_note, curses.A_REVERSE)
+        self._safe_add(stdscr, top + box_h - 2, left + 2, f"Source: {selected.source}")
+        self._safe_add(stdscr, top + box_h - 1, left + 2, selected.license_note)
 
 
 def run_tui(
