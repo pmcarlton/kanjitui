@@ -67,6 +67,12 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
         assert app._handle_search_key(ord("4")) is True
         assert app._handle_search_key(10) is True
         assert isinstance(app.search_results, list)
+        if app.search_results:
+            app.search_idx = min(3, len(app.search_results) - 1)
+            assert app._handle_search_key(curses.KEY_NPAGE) is True
+            assert app.search_idx == len(app.search_results) - 1
+            assert app._handle_search_key(curses.KEY_PPAGE) is True
+            assert app.search_idx == 0
         assert app._handle_search_key(27) is True
 
         assert app._handle_normal_key(ord("r")) is True

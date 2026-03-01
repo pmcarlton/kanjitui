@@ -1,4 +1,4 @@
-from kanjitui.tui.navigation import build_strip, move_grid_index
+from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
 
 
 def test_build_strip_centers_current_with_radius() -> None:
@@ -28,3 +28,14 @@ def test_move_grid_index_directional_bounds() -> None:
     assert move_grid_index(0, total, cols, "right") == 1
     assert move_grid_index(0, total, cols, "down") == 4
     assert move_grid_index(8, total, cols, "down") == 8
+
+
+def test_visible_window_tracks_selection() -> None:
+    start, end = visible_window(selected=0, total=20, max_rows=5)
+    assert (start, end) == (0, 5)
+
+    start, end = visible_window(selected=10, total=20, max_rows=5)
+    assert (start, end) == (8, 13)
+
+    start, end = visible_window(selected=19, total=20, max_rows=5)
+    assert (start, end) == (15, 20)

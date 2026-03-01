@@ -63,3 +63,19 @@ def grid_position(index: int, cols: int) -> GridPosition:
     row = max(index, 0) // cols
     col = max(index, 0) % cols
     return GridPosition(index=max(index, 0), row=row, col=col)
+
+
+def visible_window(selected: int, total: int, max_rows: int) -> tuple[int, int]:
+    if total <= 0 or max_rows <= 0:
+        return (0, 0)
+
+    sel = max(0, min(selected, total - 1))
+    if total <= max_rows:
+        return (0, total)
+
+    start = max(0, sel - (max_rows // 2))
+    end = start + max_rows
+    if end > total:
+        end = total
+        start = end - max_rows
+    return (start, end)
