@@ -105,6 +105,15 @@ class TuiApp:
             return "cn"
         return "either"
 
+    def _sentence_langs(self) -> tuple[str, ...]:
+        if self.show_jp and self.show_cn:
+            return ("jp", "cn")
+        if self.show_jp:
+            return ("jp",)
+        if self.show_cn:
+            return ("cn",)
+        return ("jp", "cn")
+
     def _refresh_ordering(self) -> None:
         current = self.current_cp
         base_ordered = db_query.get_ordered_cps(
@@ -599,7 +608,14 @@ class TuiApp:
             y = self._render_section(stdscr, y, w, "CN", lines, highlighted=cn_focus) + 1
 
         if self.show_sentences and y < h - 5:
-            sentence_rows = db_query.get_sentences(self.conn, detail["cp"], limit=3)
+            sentence_langs = self._sentence_langs()
+            sentence_limit = 6 if len(sentence_langs) > 1 else 3
+            sentence_rows = db_query.get_sentences(
+                self.conn,
+                detail["cp"],
+                limit=sentence_limit,
+                langs=sentence_langs,
+            )
             if not sentence_rows:
                 hint = "(no sentence examples)"
                 if self.derived_counts.get("sentences", 0) == 0:
@@ -611,7 +627,8 @@ class TuiApp:
                     line = f"{rank}. [{lang}] {text}  {reading or '-'}  {gloss or '-'}"
                     lines.append(line)
                     lines.append(f"   source: {source or '-'} ({license_name or '-'})")
-            y = self._render_section(stdscr, y, w, "Sentences", lines) + 1
+            langs_label = "/".join(lang.upper() for lang in sentence_langs)
+            y = self._render_section(stdscr, y, w, f"Sentences ({langs_label})", lines) + 1
 
         if self.show_variants and y < h - 4:
             graph = db_query.variant_graph(self.conn, detail["cp"], depth=2, max_nodes=32)

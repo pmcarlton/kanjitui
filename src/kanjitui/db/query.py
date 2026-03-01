@@ -210,17 +210,35 @@ def get_phonetic_series(conn: sqlite3.Connection, cp: int, limit: int = 80) -> l
     return [(int(row[0]), row[1] or chr(int(row[0])), str(row[2])) for row in rows]
 
 
-def get_sentences(conn: sqlite3.Connection, cp: int, limit: int = 5) -> list[tuple]:
-    rows = conn.execute(
-        """
-        SELECT lang, text, reading, gloss, source, license, rank
-        FROM sentences
-        WHERE cp = ?
-        ORDER BY lang, rank
-        LIMIT ?
-        """,
-        (cp, limit),
-    ).fetchall()
+def get_sentences(
+    conn: sqlite3.Connection,
+    cp: int,
+    limit: int = 5,
+    langs: tuple[str, ...] | None = None,
+) -> list[tuple]:
+    if langs:
+        placeholders = ",".join("?" for _ in langs)
+        rows = conn.execute(
+            f"""
+            SELECT lang, text, reading, gloss, source, license, rank
+            FROM sentences
+            WHERE cp = ? AND lang IN ({placeholders})
+            ORDER BY rank, lang
+            LIMIT ?
+            """,
+            (cp, *langs, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT lang, text, reading, gloss, source, license, rank
+            FROM sentences
+            WHERE cp = ?
+            ORDER BY rank, lang
+            LIMIT ?
+            """,
+            (cp, limit),
+        ).fetchall()
     return [tuple(row) for row in rows]
 
 
