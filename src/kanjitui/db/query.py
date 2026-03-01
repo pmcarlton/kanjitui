@@ -27,16 +27,19 @@ def get_ordered_cps(
 ) -> list[int]:
     if ordering == "freq":
         if freq_profile:
-            rows = conn.execute(
-                """
-                SELECT c.cp
-                FROM chars c
-                LEFT JOIN frequency_scores fs
-                  ON fs.cp = c.cp AND fs.profile = ?
-                ORDER BY (fs.rank IS NULL), fs.rank, (c.freq IS NULL), c.freq, c.cp
-                """,
+            # Fast path: fetch ranked profile chars first, then append remaining chars.
+            # A single LEFT JOIN + ORDER BY on expressions is significantly slower on large DBs.
+            prof_rows = conn.execute(
+                "SELECT cp FROM frequency_scores WHERE profile = ? ORDER BY rank, cp",
                 (freq_profile,),
             ).fetchall()
+            first = [int(row[0]) for row in prof_rows]
+            seen = set(first)
+            base_rows = conn.execute(
+                "SELECT cp FROM chars ORDER BY (freq IS NULL), freq, cp"
+            ).fetchall()
+            second = [int(row[0]) for row in base_rows if int(row[0]) not in seen]
+            return first + second
         else:
             rows = conn.execute(
                 "SELECT cp FROM chars ORDER BY (freq IS NULL), freq, cp"
