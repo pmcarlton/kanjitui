@@ -11,7 +11,7 @@ from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
 from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
 from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
-from kanjitui.tui.router import KeyRouter
+from kanjitui.tui.router import KeyInput, KeyRouter
 
 
 ORDERINGS = ["freq", "radical", "reading", "codepoint"]
@@ -157,11 +157,11 @@ class TuiApp:
             self.message = f"Jumped to U+{cp:04X}"
 
     def run(self, stdscr: curses.window) -> None:
-        curses.curs_set(0)
         stdscr.keypad(True)
         while True:
+            self._set_cursor_visibility()
             self._render(stdscr)
-            key = stdscr.getch()
+            key = stdscr.get_wch()
             if not self._handle_key(key):
                 break
 
@@ -174,10 +174,32 @@ class TuiApp:
             return "note"
         return "normal"
 
-    def _handle_key(self, key: int) -> bool:
+    def _handle_key(self, key: KeyInput) -> bool:
         return self.router.dispatch(key)
 
-    def _handle_normal_key(self, key: int) -> bool:
+    def _set_cursor_visibility(self) -> None:
+        target = 1 if (self.search_open or self.note_input_open) else 0
+        try:
+            curses.curs_set(target)
+        except curses.error:
+            return
+
+    def _normalize_text_key(self, key: KeyInput) -> KeyInput:
+        if isinstance(key, str):
+            if key in ("\n", "\r"):
+                return 10
+            if key == "\x1b":
+                return 27
+            if key == "\x7f":
+                return 127
+            if len(key) == 1 and ord(key) < 128:
+                return ord(key)
+        return key
+
+    def _handle_normal_key(self, key: KeyInput) -> bool:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
         if key in (ord("q"), ord("Q")):
             return False
         if key in (curses.KEY_RIGHT, curses.KEY_DOWN, ord("j")):
@@ -313,7 +335,8 @@ class TuiApp:
 
         return True
 
-    def _handle_search_key(self, key: int) -> bool | None:
+    def _handle_search_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
         if key == 27:  # Esc
             self.search_open = False
             self.search_results = []
@@ -355,6 +378,13 @@ class TuiApp:
             self.message = f"{len(self.search_results)} results"
             return True
 
+        if isinstance(key, str):
+            if key.isprintable():
+                self.search_input += key
+                self.search_results = []
+                self.search_idx = 0
+            return True
+
         if 32 <= key < 127:
             self.search_input += chr(key)
             self.search_results = []
@@ -363,7 +393,10 @@ class TuiApp:
 
         return True
 
-    def _handle_radical_key(self, key: int) -> bool | None:
+    def _handle_radical_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
         if key == 27:  # Esc
             self.radical_open = False
             self.radical_results = None
@@ -449,7 +482,8 @@ class TuiApp:
 
         return True
 
-    def _handle_note_key(self, key: int) -> bool | None:
+    def _handle_note_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
         if key == 27:  # Esc
             self.note_input_open = False
             self.note_input_text = ""
@@ -466,6 +500,11 @@ class TuiApp:
             self.note_input_open = False
             self.note_input_text = ""
             return True
+        if isinstance(key, str):
+            if key.isprintable():
+                self.note_input_text += key
+            return True
+
         if 32 <= key < 127:
             self.note_input_text += chr(key)
             return True
@@ -732,6 +771,11 @@ class TuiApp:
                 left + 2,
                 f"Result {self.search_idx + 1}/{len(self.search_results)}",
             )
+        try:
+            cursor_x = min(w - 2, left + 2 + len("Query: ") + len(self.search_input))
+            stdscr.move(top + 1, cursor_x)
+        except curses.error:
+            pass
 
     def _render_radical_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
@@ -920,6 +964,11 @@ class TuiApp:
         self._draw_box(stdscr, top, left, box_h, box_w, title="Note")
         self._safe_add(stdscr, top + 1, left + 2, "Note (Enter save, Esc cancel):")
         self._safe_add(stdscr, top + 2, left + 2, self.note_input_text)
+        try:
+            cursor_x = min(w - 2, left + 2 + len(self.note_input_text))
+            stdscr.move(top + 2, cursor_x)
+        except curses.error:
+            pass
 
 def run_tui(
     conn: sqlite3.Connection,

@@ -51,6 +51,8 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
         assert app._handle_normal_key(ord("n")) is True
         assert app.note_input_open is True
         assert app._handle_note_key(ord("a")) is True
+        assert app._handle_note_key("字") is True
+        assert "字" in app.note_input_text
         assert app._handle_note_key(10) is True
         assert app.note_input_open is False
 
@@ -63,6 +65,8 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
         assert app._handle_search_key(ord("a")) is True
         assert app._handle_search_key(ord("n")) is True
         assert app._handle_search_key(ord("4")) is True
+        assert app._handle_search_key("角") is True
+        assert "角" in app.search_input
         assert app._handle_search_key(10) is True
         assert isinstance(app.search_results, list)
         if app.search_results:

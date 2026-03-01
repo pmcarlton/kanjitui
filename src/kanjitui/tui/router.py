@@ -3,12 +3,13 @@ from __future__ import annotations
 from typing import Callable
 
 
-KeyHandler = Callable[[int], bool | None]
+KeyInput = int | str
+KeyHandler = Callable[[KeyInput], bool | None]
 ModeResolver = Callable[[], str]
 
 
 class KeyRouter:
-    def __init__(self, mode_resolver: ModeResolver, default_handler: Callable[[int], bool]) -> None:
+    def __init__(self, mode_resolver: ModeResolver, default_handler: Callable[[KeyInput], bool]) -> None:
         self._mode_resolver = mode_resolver
         self._default_handler = default_handler
         self._mode_handlers: dict[str, KeyHandler] = {}
@@ -16,7 +17,7 @@ class KeyRouter:
     def register(self, mode: str, handler: KeyHandler) -> None:
         self._mode_handlers[mode] = handler
 
-    def dispatch(self, key: int) -> bool:
+    def dispatch(self, key: KeyInput) -> bool:
         mode = self._mode_resolver()
         handler = self._mode_handlers.get(mode)
         if handler is not None:
