@@ -905,8 +905,15 @@ class TuiApp:
                 hint = "(no phonetic rows; rebuild DB with current builder)"
             self._safe_add(stdscr, top + 2, left + 2, hint)
             return
-        for idx, (member_cp, member_ch, key) in enumerate(series_rows[: box_h - 3]):
+        for idx, (member_cp, member_ch, key, pinyin_marked, pinyin_numbered) in enumerate(
+            series_rows[: box_h - 3]
+        ):
+            pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(
+                pinyin_numbered
+            )
             text = f"{idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
+            if pinyin:
+                text += f"  {pinyin}"
             self._safe_add(stdscr, top + 2 + idx, left + 2, text)
 
     def _render_user_overlay(self, stdscr: curses.window, cp: int) -> None:

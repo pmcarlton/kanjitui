@@ -180,7 +180,7 @@ def get_components(conn: sqlite3.Connection, cp: int) -> list[tuple[int, str]]:
     return [(int(row[0]), row[1] or chr(int(row[0]))) for row in rows]
 
 
-def get_phonetic_series(conn: sqlite3.Connection, cp: int, limit: int = 80) -> list[tuple[int, str, str]]:
+def get_phonetic_series(conn: sqlite3.Connection, cp: int, limit: int = 80) -> list[tuple[int, str, str, str, str]]:
     series_rows = conn.execute(
         "SELECT DISTINCT series_key FROM phonetic_series WHERE cp = ? LIMIT 4",
         (cp,),
@@ -198,7 +198,30 @@ def get_phonetic_series(conn: sqlite3.Connection, cp: int, limit: int = 80) -> l
     placeholders = ",".join("?" for _ in keys)
     rows = conn.execute(
         f"""
-        SELECT ps.cp, COALESCE(c.ch, ''), ps.series_key
+        SELECT
+            ps.cp,
+            COALESCE(c.ch, ''),
+            ps.series_key,
+            COALESCE(
+                (
+                    SELECT cr.pinyin_marked
+                    FROM cn_readings cr
+                    WHERE cr.cp = ps.cp AND cr.pinyin_marked != ''
+                    ORDER BY cr.rank, cr.pinyin_numbered
+                    LIMIT 1
+                ),
+                ''
+            ) AS pinyin_marked,
+            COALESCE(
+                (
+                    SELECT cr.pinyin_numbered
+                    FROM cn_readings cr
+                    WHERE cr.cp = ps.cp AND cr.pinyin_numbered != ''
+                    ORDER BY cr.rank, cr.pinyin_numbered
+                    LIMIT 1
+                ),
+                ''
+            ) AS pinyin_numbered
         FROM phonetic_series ps
         LEFT JOIN chars c ON c.cp = ps.cp
         WHERE ps.series_key IN ({placeholders})
@@ -207,7 +230,16 @@ def get_phonetic_series(conn: sqlite3.Connection, cp: int, limit: int = 80) -> l
         """,
         (*keys, limit),
     ).fetchall()
-    return [(int(row[0]), row[1] or chr(int(row[0])), str(row[2])) for row in rows]
+    return [
+        (
+            int(row[0]),
+            row[1] or chr(int(row[0])),
+            str(row[2]),
+            str(row[3] or ""),
+            str(row[4] or ""),
+        )
+        for row in rows
+    ]
 
 
 def get_sentences(
