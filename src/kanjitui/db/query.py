@@ -82,6 +82,14 @@ def radical_counts(conn: sqlite3.Connection) -> list[tuple[int, int]]:
     return [(int(rad), int(cnt)) for rad, cnt in rows]
 
 
+def reading_cp_sets(conn: sqlite3.Connection) -> tuple[set[int], set[int]]:
+    jp_rows = conn.execute("SELECT DISTINCT cp FROM jp_readings").fetchall()
+    cn_rows = conn.execute("SELECT DISTINCT cp FROM cn_readings").fetchall()
+    jp = {int(row[0]) for row in jp_rows}
+    cn = {int(row[0]) for row in cn_rows}
+    return (jp, cn)
+
+
 def stroke_options_by_radical(conn: sqlite3.Connection, radical: int) -> list[int]:
     rows = conn.execute(
         "SELECT DISTINCT strokes FROM chars WHERE radical = ? AND strokes IS NOT NULL ORDER BY strokes",

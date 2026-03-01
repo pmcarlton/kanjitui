@@ -3,12 +3,12 @@ from __future__ import annotations
 import curses
 import sqlite3
 import webbrowser
+from urllib.parse import quote
 
 from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
-from kanjitui.tui.imagelinks import ImageLink, cc_image_links
 from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
 from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
 from kanjitui.tui.router import KeyRouter
@@ -33,6 +33,7 @@ class TuiApp:
         if self.user_store is not None:
             self.bookmarked_cps = {cp for cp, _ in self.user_store.list_bookmarks(limit=1000)}
         self.derived_counts = db_query.derived_data_counts(conn)
+        self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(conn)
 
         self.focus = "jp"
         self.ordering_idx = 0
@@ -49,10 +50,10 @@ class TuiApp:
         self.show_variants = True
         self.show_help = False
         self.show_provenance = False
-        self.show_variant_graph = False
         self.show_components = False
         self.show_phonetic = False
         self.show_jp_romaji = False
+        self.hide_no_reading = False
 
         self.message = "Ready"
         if self.derived_counts.get("field_provenance", 0) == 0:
@@ -65,9 +66,6 @@ class TuiApp:
         self.note_input_open = False
         self.note_input_text = ""
         self.show_user_overlay = False
-        self.image_panel_open = False
-        self.image_links: list[ImageLink] = []
-        self.image_idx = 0
 
         self.radical_open = False
         self.radical_counts = dict(db_query.radical_counts(conn))
@@ -84,7 +82,6 @@ class TuiApp:
         self.router.register("search", self._handle_search_key)
         self.router.register("radical", self._handle_radical_key)
         self.router.register("note", self._handle_note_key)
-        self.router.register("image", self._handle_image_key)
 
     @property
     def current_cp(self) -> int | None:
@@ -99,14 +96,33 @@ class TuiApp:
             return None
         return self.freq_profiles[self.freq_profile_idx]
 
+    def _reading_filter_scope(self) -> str:
+        if ORDERINGS[self.ordering_idx] == "reading":
+            return self.focus
+        if self.show_jp and not self.show_cn:
+            return "jp"
+        if self.show_cn and not self.show_jp:
+            return "cn"
+        return "either"
+
     def _refresh_ordering(self) -> None:
         current = self.current_cp
-        self.ordered_cps = db_query.get_ordered_cps(
+        ordered = db_query.get_ordered_cps(
             self.conn,
             ORDERINGS[self.ordering_idx],
             self.focus,
             self.current_freq_profile,
         )
+        if self.hide_no_reading:
+            scope = self._reading_filter_scope()
+            if scope == "jp":
+                allowed = self.jp_reading_cps
+            elif scope == "cn":
+                allowed = self.cn_reading_cps
+            else:
+                allowed = self.jp_reading_cps | self.cn_reading_cps
+            ordered = [cp for cp in ordered if cp in allowed]
+        self.ordered_cps = ordered
         if current is None or not self.ordered_cps:
             self.pos = 0
             return
@@ -136,8 +152,6 @@ class TuiApp:
             return "radical"
         if self.note_input_open:
             return "note"
-        if self.image_panel_open:
-            return "image"
         return "normal"
 
     def _handle_key(self, key: int) -> bool:
@@ -164,7 +178,7 @@ class TuiApp:
 
         if key == 9:  # Tab
             self.focus = "cn" if self.focus == "jp" else "jp"
-            if ORDERINGS[self.ordering_idx] == "reading":
+            if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
                 self._refresh_ordering()
             return True
 
@@ -189,9 +203,13 @@ class TuiApp:
 
         if key == ord("1"):
             self.show_jp = not self.show_jp
+            if self.hide_no_reading:
+                self._refresh_ordering()
             return True
         if key == ord("2"):
             self.show_cn = not self.show_cn
+            if self.hide_no_reading:
+                self._refresh_ordering()
             return True
         if key == ord("3"):
             self.show_sentences = not self.show_sentences
@@ -201,11 +219,6 @@ class TuiApp:
             return True
         if key in (ord("p"), ord("P")):
             self.show_provenance = not self.show_provenance
-            self.show_variant_graph = False if self.show_provenance else self.show_variant_graph
-            return True
-        if key in (ord("g"), ord("G")):
-            self.show_variant_graph = not self.show_variant_graph
-            self.show_provenance = False if self.show_variant_graph else self.show_provenance
             return True
         if key in (ord("c"), ord("C")):
             self.show_components = not self.show_components
@@ -221,6 +234,12 @@ class TuiApp:
             self.show_jp_romaji = not self.show_jp_romaji
             self.message = f"JP romaji: {'on' if self.show_jp_romaji else 'off'}"
             return True
+        if key == ord("N"):
+            self.hide_no_reading = not self.hide_no_reading
+            self._refresh_ordering()
+            scope = self._reading_filter_scope()
+            self.message = f"Hide no-reading: {'on' if self.hide_no_reading else 'off'} (scope={scope})"
+            return True
         if key in (ord("b"), ord("B")):
             cp = self.current_cp
             if cp is None or self.user_store is None:
@@ -235,7 +254,7 @@ class TuiApp:
                 f"Bookmarked U+{cp:04X}" if bookmarked else f"Removed bookmark U+{cp:04X}"
             )
             return True
-        if key in (ord("n"), ord("N")):
+        if key == ord("n"):
             if self.user_store is None:
                 self.message = "User workspace unavailable"
                 return True
@@ -249,9 +268,10 @@ class TuiApp:
             cp = self.current_cp
             if cp is None:
                 return True
-            self.image_panel_open = True
-            self.image_idx = 0
-            self.image_links = cc_image_links(chr(cp), cp)
+            ch = chr(cp)
+            url = f"http://ccamc.org/cjkv.php?cjkv={quote(ch)}"
+            webbrowser.open(url)
+            self.message = f"Opened CCAMC for {ch}"
             return True
         if key == ord("?"):
             self.show_help = not self.show_help
@@ -431,25 +451,6 @@ class TuiApp:
             return True
         return True
 
-    def _handle_image_key(self, key: int) -> bool | None:
-        if key in (27, ord("i"), ord("I")):
-            self.image_panel_open = False
-            self.message = "Closed image links"
-            return True
-        if key in (curses.KEY_UP, ord("k")) and self.image_links:
-            self.image_idx = max(0, self.image_idx - 1)
-            return True
-        if key in (curses.KEY_DOWN, ord("j")) and self.image_links:
-            self.image_idx = min(len(self.image_links) - 1, self.image_idx + 1)
-            return True
-        if key in (ord("o"), ord("O"), 10, 13, curses.KEY_ENTER):
-            if self.image_links:
-                target = self.image_links[self.image_idx]
-                webbrowser.open(target.url)
-                self.message = f"Opened: {target.label}"
-            return True
-        return True
-
     def _safe_add(self, stdscr: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
         h, w = stdscr.getmaxyx()
         if y < 0 or y >= h:
@@ -528,9 +529,10 @@ class TuiApp:
             bookmark_marker = " ★"
         focus_label = f"  reading-sort:{self.focus.upper()}" if ORDERINGS[self.ordering_idx] == "reading" else ""
         romaji_label = "  JP-romaji:on" if self.show_jp_romaji else ""
+        filtered_label = "  hide-no-reading:on" if self.hide_no_reading else ""
         header = (
             f"{detail['ch']}{bookmark_marker} U+{detail['cp']:04X}  radical {detail['radical'] or '-'}  "
-            f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}{romaji_label}"
+            f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}{romaji_label}{filtered_label}"
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
 
@@ -601,14 +603,21 @@ class TuiApp:
             y = self._render_section(stdscr, y, w, "Sentences", lines) + 1
 
         if self.show_variants and y < h - 4:
-            vars_text = ", ".join(
-                f"{kind}->U+{target:04X}" for kind, target, _ in detail["variants"][:8]
-            ) or "(none)"
-            y = self._render_section(stdscr, y, w, "Variants", [vars_text])
+            graph = db_query.variant_graph(self.conn, detail["cp"], depth=2, max_nodes=32)
+            node_map = {node_cp: node_ch for node_cp, node_ch in graph["nodes"]}
+            lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}"]
+            if not graph["edges"]:
+                lines.append("(no variant edges)")
+            else:
+                for src, kind, dst in graph["edges"][:8]:
+                    src_ch = node_map.get(src, chr(src))
+                    dst_ch = node_map.get(dst, chr(dst))
+                    lines.append(f"{src_ch} U+{src:04X} -{kind}-> {dst_ch} U+{dst:04X}")
+            y = self._render_section(stdscr, y, w, "Variants", lines)
 
         menu_line = (
             "Nav:←/→/j/k Home End Tab  Search:/  Radical:r  Panes:1 2 3 v  "
-            "Overlays:c s p g u i  User:b n  JP:m  Order:O F  Help:?  Quit:q"
+            "Overlays:c s p  User:b n u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
         )
         self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
         status = self.message
@@ -618,8 +627,6 @@ class TuiApp:
             self._render_help(stdscr)
         if self.show_provenance:
             self._render_provenance_overlay(stdscr, detail["cp"])
-        if self.show_variant_graph:
-            self._render_variant_graph_overlay(stdscr, detail["cp"])
         if self.show_components:
             self._render_components_overlay(stdscr, detail["cp"])
         if self.show_phonetic:
@@ -628,8 +635,6 @@ class TuiApp:
             self._render_user_overlay(stdscr, detail["cp"])
         if self.note_input_open:
             self._render_note_input_overlay(stdscr)
-        if self.image_panel_open:
-            self._render_image_overlay(stdscr)
         if self.search_open:
             self._render_search_overlay(stdscr)
         if self.radical_open:
@@ -643,11 +648,12 @@ class TuiApp:
             "Navigation: ←/→/j/k, Home/End, Tab reading-sort target",
             "Ordering: O cycle ordering, F cycle freq profile",
             "JP panel: m toggles kana/romaji",
+            "Filter: Shift-N toggles hide-no-reading (scope by language visibility/focus)",
             "Search: / open, Enter run/jump, Shift-Up/Down jump top/bottom",
             "Radicals: r open, arrows move, Enter select, [/] stroke filter",
             "Panels: 1 JP, 2 CN, 3 Sentences, v Variants",
-            "Overlays: c Components, s Phonetics, p Provenance, g Variant graph",
-            "Workspace: b Bookmark, n Note, u User panel, i Image links",
+            "Overlays: c Components, s Phonetics, p Provenance, u User panel",
+            "Workspace: b Bookmark, n Note, i open CCAMC glyph page",
             "Global: ? Help, q Quit",
             "Data: Unicode Unihan, EDRDG KANJIDIC2/JMdict, CC-CEDICT",
             "License details in data/licenses/",
@@ -793,30 +799,6 @@ class TuiApp:
             text = f"{field}: {value} [{source} {conf:.2f}]"
             self._safe_add(stdscr, top + 2 + idx, left + 2, text)
 
-    def _render_variant_graph_overlay(self, stdscr: curses.window, cp: int) -> None:
-        h, w = stdscr.getmaxyx()
-        box_h = min(14, h - 2)
-        top = max(1, (h - box_h) // 2)
-        left = 1
-        box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Variant Graph")
-
-        graph = db_query.variant_graph(self.conn, cp, depth=2, max_nodes=32)
-        node_map = {node_cp: node_ch for node_cp, node_ch in graph["nodes"]}
-        self._safe_add(stdscr, top + 1, left + 2, "g closes overlay")
-        self._safe_add(
-            stdscr,
-            top + 2,
-            left + 2,
-            f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}",
-        )
-        max_rows = box_h - 4
-        for idx, (src, kind, dst) in enumerate(graph["edges"][:max_rows]):
-            src_ch = node_map.get(src, chr(src))
-            dst_ch = node_map.get(dst, chr(dst))
-            text = f"{src_ch} U+{src:04X} -{kind}-> {dst_ch} U+{dst:04X}"
-            self._safe_add(stdscr, top + 3 + idx, left + 2, text)
-
     def _render_components_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
         box_h = min(12, h - 2)
@@ -910,32 +892,6 @@ class TuiApp:
         self._draw_box(stdscr, top, left, box_h, box_w, title="Note")
         self._safe_add(stdscr, top + 1, left + 2, "Note (Enter save, Esc cancel):")
         self._safe_add(stdscr, top + 2, left + 2, self.note_input_text)
-
-    def _render_image_overlay(self, stdscr: curses.window) -> None:
-        h, w = stdscr.getmaxyx()
-        box_h = min(12, h - 2)
-        top = max(1, (h - box_h) // 2)
-        left = 1
-        box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="CC Image Links")
-        self._safe_add(
-            stdscr,
-            top + 1,
-            left + 2,
-            "CC image links (Up/Down select, Enter/o open, i/Esc close)",
-        )
-        if not self.image_links:
-            self._safe_add(stdscr, top + 2, left + 2, "(no links)")
-            return
-        max_rows = box_h - 4
-        for idx, link in enumerate(self.image_links[:max_rows]):
-            marker = "▶" if idx == self.image_idx else " "
-            row_attr = curses.A_BOLD if idx == self.image_idx else 0
-            self._safe_add(stdscr, top + 2 + idx, left + 2, f"{marker} {link.label}", row_attr)
-        selected = self.image_links[self.image_idx]
-        self._safe_add(stdscr, top + box_h - 2, left + 2, f"Source: {selected.source}")
-        self._safe_add(stdscr, top + box_h - 1, left + 2, selected.license_note)
-
 
 def run_tui(
     conn: sqlite3.Connection,

@@ -45,7 +45,7 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
     try:
         app = TuiApp(conn, user_store=user_store)
 
-        for ch in ["1", "2", "3", "v", "p", "g", "c", "s", "u", "?", "b", "O", "F", "m"]:
+        for ch in ["1", "2", "3", "v", "p", "c", "s", "u", "?", "b", "O", "F", "m", "N"]:
             assert app._handle_normal_key(ord(ch)) is True
 
         assert app._handle_normal_key(ord("n")) is True
@@ -55,10 +55,8 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
         assert app.note_input_open is False
 
         assert app._handle_normal_key(ord("i")) is True
-        assert app.image_panel_open is True
-        assert app._handle_image_key(ord("o")) is True
         assert opened
-        assert app._handle_image_key(27) is True
+        assert "http://ccamc.org/cjkv.php?cjkv=" in opened[-1]
 
         assert app._handle_normal_key(ord("/")) is True
         assert app._handle_search_key(ord("h")) is True
@@ -81,5 +79,30 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
         assert app._handle_radical_key(ord("]")) is True
         assert app._handle_radical_key(ord("[")) is True
         assert app._handle_radical_key(27) is True
+
+        assert app._handle_normal_key(ord("N")) is True
+        assert app.hide_no_reading is False
+    finally:
+        conn.close()
+
+
+def test_no_reading_filter_respects_language_scope(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        baseline = len(app.ordered_cps)
+        assert baseline > 0
+
+        # With both JP and CN shown, "either" scope keeps all fixture chars.
+        assert app.show_jp is True and app.show_cn is True
+        assert app._handle_normal_key(ord("N")) is True
+        assert app.hide_no_reading is True
+        assert len(app.ordered_cps) == baseline
+
+        # JP-only view filters to chars that actually have JP readings.
+        assert app._handle_normal_key(ord("2")) is True
+        assert len(app.ordered_cps) < baseline
+        assert len(app.ordered_cps) > 0
     finally:
         conn.close()
