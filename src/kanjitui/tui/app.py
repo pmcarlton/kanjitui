@@ -107,12 +107,14 @@ class TuiApp:
 
     def _refresh_ordering(self) -> None:
         current = self.current_cp
-        ordered = db_query.get_ordered_cps(
+        base_ordered = db_query.get_ordered_cps(
             self.conn,
             ORDERINGS[self.ordering_idx],
             self.focus,
             self.current_freq_profile,
         )
+        ordered = base_ordered
+        allowed: set[int] | None = None
         if self.hide_no_reading:
             scope = self._reading_filter_scope()
             if scope == "jp":
@@ -129,6 +131,15 @@ class TuiApp:
         try:
             self.pos = self.ordered_cps.index(current)
         except ValueError:
+            # If the current glyph was filtered out, advance to the next glyph
+            # that survives the current ordering/filter scope.
+            if allowed is not None and current in base_ordered:
+                start = base_ordered.index(current)
+                for offset in range(1, len(base_ordered) + 1):
+                    candidate = base_ordered[(start + offset) % len(base_ordered)]
+                    if candidate in allowed:
+                        self.pos = self.ordered_cps.index(candidate)
+                        return
             self.pos = 0
 
     def _jump_to_cp(self, cp: int) -> None:

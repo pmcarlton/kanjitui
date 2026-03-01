@@ -106,3 +106,35 @@ def test_no_reading_filter_respects_language_scope(tmp_path: Path) -> None:
         assert len(app.ordered_cps) > 0
     finally:
         conn.close()
+
+
+def test_no_reading_filter_advances_to_next_glyph_when_current_filtered(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        app.ordering_idx = 3  # codepoint ordering for deterministic neighbor checks
+        app._refresh_ordering()
+
+        base = list(app.ordered_cps)
+        assert base
+        assert app.jp_reading_cps
+
+        current = next((cp for cp in base if cp not in app.jp_reading_cps), None)
+        assert current is not None
+        app.pos = base.index(current)
+        assert app.current_cp == current
+
+        expected = None
+        for offset in range(1, len(base) + 1):
+            candidate = base[(app.pos + offset) % len(base)]
+            if candidate in app.jp_reading_cps:
+                expected = candidate
+                break
+        assert expected is not None
+
+        assert app._handle_normal_key(ord("2")) is True  # JP only
+        assert app._handle_normal_key(ord("N")) is True  # enable hide-no-reading
+        assert app.current_cp == expected
+    finally:
+        conn.close()
