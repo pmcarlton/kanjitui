@@ -4,5 +4,6 @@ __pycache__/
 .venv/
 data/raw/
 data/db.sqlite
+data/user.sqlite
 data/font_profile.json
 data/build_report.json
