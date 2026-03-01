@@ -115,6 +115,8 @@ ROMAJI_TO_HIRA = {
     "n": "ん",
 }
 
+HIRA_TO_ROMAJI = {hira: roma for roma, hira in ROMAJI_TO_HIRA.items()}
+
 
 PINYIN_MARKS = {
     "a": "āáǎà",
@@ -200,6 +202,71 @@ def romaji_to_hiragana(text: str) -> str:
         out.append(s[i])
         i += 1
     return "".join(out)
+
+
+def _lookup_next_romaji(s: str, i: int) -> str | None:
+    for size in (2, 1):
+        chunk = s[i : i + size]
+        if chunk in HIRA_TO_ROMAJI:
+            return HIRA_TO_ROMAJI[chunk]
+    return None
+
+
+def _last_vowel(text: str) -> str | None:
+    for ch in reversed(text):
+        if ch in "aeiou":
+            return ch
+    return None
+
+
+def hiragana_to_romaji(text: str) -> str:
+    s = normalize_kana(text)
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch.isspace():
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == "ー":
+            if out:
+                v = _last_vowel(out[-1])
+                if v:
+                    out.append(v)
+            i += 1
+            continue
+
+        if ch == "っ":
+            nxt = _lookup_next_romaji(s, i + 1) if i + 1 < len(s) else None
+            if nxt:
+                out.append(nxt[0])
+            i += 1
+            continue
+
+        if ch == "ん":
+            nxt = _lookup_next_romaji(s, i + 1) if i + 1 < len(s) else None
+            if nxt and nxt[0] in "aiueoy":
+                out.append("n'")
+            else:
+                out.append("n")
+            i += 1
+            continue
+
+        matched = _lookup_next_romaji(s, i)
+        if matched is not None:
+            out.append(matched)
+            i += 2 if i + 1 < len(s) and s[i : i + 2] in HIRA_TO_ROMAJI else 1
+            continue
+
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def kana_to_romaji(text: str) -> str:
+    return hiragana_to_romaji(text)
 
 
 def looks_like_pinyin(text: str) -> bool:

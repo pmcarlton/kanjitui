@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from kanjitui.db.migrations import apply_migrations
+from kanjitui.search import normalize as search_normalize
 from kanjitui.search.normalizer import NormalizerPlugin, get_normalizer
 
 
@@ -245,7 +246,8 @@ def preview_row(conn: sqlite3.Connection, cp: int) -> dict:
         "SELECT reading FROM jp_readings WHERE cp = ? ORDER BY rank, reading LIMIT 1", (cp,)
     ).fetchone()
     cn = conn.execute(
-        "SELECT pinyin_numbered FROM cn_readings WHERE cp = ? ORDER BY rank, pinyin_numbered LIMIT 1", (cp,)
+        "SELECT pinyin_marked, pinyin_numbered FROM cn_readings WHERE cp = ? ORDER BY rank, pinyin_numbered LIMIT 1",
+        (cp,),
     ).fetchone()
 
     gloss = conn.execute(
@@ -263,7 +265,11 @@ def preview_row(conn: sqlite3.Connection, cp: int) -> dict:
         "cp": cp,
         "ch": row[0],
         "jp": jp[0] if jp else "",
-        "cn": cn[0] if cn else "",
+        "cn": (
+            (cn[0] or search_normalize.pinyin_numbered_to_marked(cn[1] or ""))
+            if cn
+            else ""
+        ),
         "gloss": gloss[0] if gloss else "",
     }
 

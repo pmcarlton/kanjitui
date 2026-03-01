@@ -45,7 +45,7 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
     try:
         app = TuiApp(conn, user_store=user_store)
 
-        for ch in ["1", "2", "3", "v", "p", "g", "c", "s", "u", "?", "b", "O", "F"]:
+        for ch in ["1", "2", "3", "v", "p", "g", "c", "s", "u", "?", "b", "O", "F", "m"]:
             assert app._handle_normal_key(ord(ch)) is True
 
         assert app._handle_normal_key(ord("n")) is True

@@ -6,6 +6,7 @@ import webbrowser
 
 from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
+from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
 from kanjitui.tui.imagelinks import ImageLink, cc_image_links
 from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
@@ -51,6 +52,7 @@ class TuiApp:
         self.show_variant_graph = False
         self.show_components = False
         self.show_phonetic = False
+        self.show_jp_romaji = False
 
         self.message = "Ready"
         if self.derived_counts.get("field_provenance", 0) == 0:
@@ -214,6 +216,10 @@ class TuiApp:
             self.show_phonetic = not self.show_phonetic
             if self.show_phonetic:
                 self.show_components = False
+            return True
+        if key in (ord("m"), ord("M")):
+            self.show_jp_romaji = not self.show_jp_romaji
+            self.message = f"JP romaji: {'on' if self.show_jp_romaji else 'off'}"
             return True
         if key in (ord("b"), ord("B")):
             cp = self.current_cp
@@ -521,29 +527,47 @@ class TuiApp:
         if detail["cp"] in self.bookmarked_cps:
             bookmark_marker = " ★"
         focus_label = f"  reading-sort:{self.focus.upper()}" if ORDERINGS[self.ordering_idx] == "reading" else ""
+        romaji_label = "  JP-romaji:on" if self.show_jp_romaji else ""
         header = (
             f"{detail['ch']}{bookmark_marker} U+{detail['cp']:04X}  radical {detail['radical'] or '-'}  "
-            f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}"
+            f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}{romaji_label}"
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
 
-        y = 1
+        self._render_nav_strip(stdscr, 2)
+        y = 4
         if self.show_jp:
-            on = " ".join(detail["jp_on"]) if detail["jp_on"] else "(none)"
-            kun = " ".join(detail["jp_kun"]) if detail["jp_kun"] else "(none)"
+            if self.show_jp_romaji:
+                on_parts = [search_normalize.kana_to_romaji(reading) for reading in detail["jp_on"]]
+                kun_parts = [search_normalize.kana_to_romaji(reading) for reading in detail["jp_kun"]]
+            else:
+                on_parts = detail["jp_on"]
+                kun_parts = detail["jp_kun"]
+            on = " ".join(on_parts) if on_parts else "(none)"
+            kun = " ".join(kun_parts) if kun_parts else "(none)"
             jp_gloss = "; ".join(detail["jp_gloss"][:3]) if detail["jp_gloss"] else "(none)"
             words = detail["jp_words"]
-            lines = [f"Readings: on {on} | kun {kun}", f"Gloss: {jp_gloss}", "Words:"]
+            reading_label = "Readings (romaji)" if self.show_jp_romaji else "Readings"
+            lines = [f"{reading_label}: on {on} | kun {kun}", f"Gloss: {jp_gloss}", "Words:"]
             if not words:
                 lines.append("  (no examples found)")
             else:
-                lines.extend([f"  {rank}. {word}  {kana or '-'}  {gloss or '-'}" for word, kana, gloss, rank in words[:5]])
+                rendered_words = []
+                for word, kana, gloss, rank in words[:5]:
+                    reading = kana or "-"
+                    if self.show_jp_romaji and kana:
+                        reading = search_normalize.kana_to_romaji(kana)
+                    rendered_words.append(f"  {rank}. {word}  {reading}  {gloss or '-'}")
+                lines.extend(rendered_words)
             jp_focus = ORDERINGS[self.ordering_idx] == "reading" and self.focus == "jp"
             y = self._render_section(stdscr, y, w, "JP", lines, highlighted=jp_focus) + 1
 
         if self.show_cn and y < h - 5:
             if detail["cn_readings"]:
-                readings = "  ".join(f"{m} ({n})" for m, n in detail["cn_readings"][:5])
+                readings = "  ".join(
+                    (marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-")
+                    for marked, numbered in detail["cn_readings"][:5]
+                )
             else:
                 readings = "(none)"
             cn_gloss = "; ".join(detail["cn_gloss"][:3]) if detail["cn_gloss"] else "(none)"
@@ -553,7 +577,10 @@ class TuiApp:
                 lines.append("  (no examples found)")
             else:
                 lines.extend(
-                    [f"  {rank}. {trad}/{simp}  {marked} ({numbered})  {gloss}" for trad, simp, marked, numbered, gloss, rank in words[:5]]
+                    [
+                        f"  {rank}. {trad}/{simp}  {(marked or search_normalize.pinyin_numbered_to_marked(numbered or '') or '-')}  {gloss}"
+                        for trad, simp, marked, numbered, gloss, rank in words[:5]
+                    ]
                 )
             cn_focus = ORDERINGS[self.ordering_idx] == "reading" and self.focus == "cn"
             y = self._render_section(stdscr, y, w, "CN", lines, highlighted=cn_focus) + 1
@@ -581,14 +608,10 @@ class TuiApp:
 
         menu_line = (
             "Nav:←/→/j/k Home End Tab  Search:/  Radical:r  Panes:1 2 3 v  "
-            "Overlays:c s p g u i  User:b n  Order:O F  Help:?  Quit:q"
+            "Overlays:c s p g u i  User:b n  JP:m  Order:O F  Help:?  Quit:q"
         )
-        self._safe_add(stdscr, h - 3, 0, menu_line, curses.A_BOLD)
-        self._render_nav_strip(stdscr, h - 2)
-        status = (
-            "Search: Shift-Up/Home=top  Shift-Down/End=bottom  Enter=jump | "
-            f"{self.message}"
-        )
+        self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
+        status = self.message
         self._safe_add(stdscr, h - 1, 0, status, curses.A_BOLD)
 
         if self.show_help:
@@ -619,6 +642,7 @@ class TuiApp:
         lines = [
             "Navigation: ←/→/j/k, Home/End, Tab reading-sort target",
             "Ordering: O cycle ordering, F cycle freq profile",
+            "JP panel: m toggles kana/romaji",
             "Search: / open, Enter run/jump, Shift-Up/Down jump top/bottom",
             "Radicals: r open, arrows move, Enter select, [/] stroke filter",
             "Panels: 1 JP, 2 CN, 3 Sentences, v Variants",
