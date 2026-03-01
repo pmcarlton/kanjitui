@@ -24,6 +24,7 @@ class AppConfig:
     jmdict_xml: Path | None
     cedict_txt: Path | None
     providers: tuple[str, ...]
+    normalizer: str
     no_font_filter: bool
     verbose: bool
     config_path: Path | None
@@ -206,6 +207,15 @@ def resolve_app_config(args: Any) -> AppConfig:
         )
     )
 
+    normalizer = str(
+        _resolve_value(
+            cli=args.normalizer,
+            env="KANJITUI_NORMALIZER",
+            file_value=build_section.get("normalizer"),
+            default="default",
+        )
+    )
+
     verbose = bool(
         _resolve_value(
             cli=args.verbose,
@@ -268,6 +278,7 @@ def resolve_app_config(args: Any) -> AppConfig:
         jmdict_xml=jmdict_xml,
         cedict_txt=cedict_txt,
         providers=providers,
+        normalizer=normalizer,
         no_font_filter=no_font_filter,
         verbose=verbose,
         config_path=config_path,

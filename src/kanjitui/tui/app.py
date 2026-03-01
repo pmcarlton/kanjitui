@@ -14,9 +14,9 @@ ORDERINGS = ["freq", "radical", "reading", "codepoint"]
 
 
 class TuiApp:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, normalizer_name: str = "default") -> None:
         self.conn = conn
-        self.search_engine = SearchEngine(conn)
+        self.search_engine = SearchEngine(conn, normalizer_name=normalizer_name)
 
         self.focus = "jp"
         self.ordering_idx = 0
@@ -27,6 +27,8 @@ class TuiApp:
         self.show_cn = True
         self.show_variants = True
         self.show_help = False
+        self.show_provenance = False
+        self.show_variant_graph = False
 
         self.message = "Ready"
 
@@ -128,6 +130,14 @@ class TuiApp:
             return True
         if key in (ord("v"), ord("V")):
             self.show_variants = not self.show_variants
+            return True
+        if key in (ord("p"), ord("P")):
+            self.show_provenance = not self.show_provenance
+            self.show_variant_graph = False if self.show_provenance else self.show_variant_graph
+            return True
+        if key in (ord("g"), ord("G")):
+            self.show_variant_graph = not self.show_variant_graph
+            self.show_provenance = False if self.show_variant_graph else self.show_provenance
             return True
         if key == ord("?"):
             self.show_help = not self.show_help
@@ -339,13 +349,17 @@ class TuiApp:
 
         self._render_nav_strip(stdscr, h - 2)
         status = (
-            "Arrows/jk:move Tab:focus O:order /:search r:radical 1/2/v:toggle ?:help q:quit | "
+            "Arrows/jk:move Tab:focus O:order /:search r:radical 1/2/v:toggle p:prov g:graph ?:help q:quit | "
             f"{self.message}"
         )
         self._safe_add(stdscr, h - 1, 0, status, curses.A_REVERSE)
 
         if self.show_help:
             self._render_help(stdscr)
+        if self.show_provenance:
+            self._render_provenance_overlay(stdscr, detail["cp"])
+        if self.show_variant_graph:
+            self._render_variant_graph_overlay(stdscr, detail["cp"])
         if self.search_open:
             self._render_search_overlay(stdscr)
         if self.radical_open:
@@ -360,7 +374,8 @@ class TuiApp:
             "Right/Down/j next, Left/Up/k previous",
             "Home/End jump, Tab focus JP/CN, O order",
             "/ search (char, U+hex, kana, romaji, pinyin, gloss)",
-            "r radical browser, 1/2 pane toggle, v variants, ? help, q quit",
+            "r radical browser, 1/2 pane toggle, v variants",
+            "p provenance, g variant graph, ? help, q quit",
             "Data: Unicode Unihan, EDRDG KANJIDIC2/JMdict, CC-CEDICT",
             "License details: data/licenses/",
         ]
@@ -482,7 +497,48 @@ class TuiApp:
                 attr |= curses.A_REVERSE
             self._safe_add(stdscr, y, x, text, attr)
 
+    def _render_provenance_overlay(self, stdscr: curses.window, cp: int) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(14, h - 2)
+        top = max(1, (h - box_h) // 2)
+        left = 1
+        box_w = w - 2
+        for y in range(top, top + box_h):
+            self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
 
-def run_tui(conn: sqlite3.Connection) -> None:
-    app = TuiApp(conn)
+        rows = db_query.get_provenance(self.conn, cp, limit=box_h - 3)
+        self._safe_add(stdscr, top + 1, left + 2, "Provenance (p to close)", curses.A_REVERSE)
+        if not rows:
+            self._safe_add(stdscr, top + 2, left + 2, "(no provenance rows)", curses.A_REVERSE)
+            return
+        for idx, (field, value, source, conf) in enumerate(rows):
+            text = f"{field}: {value} [{source} {conf:.2f}]"
+            self._safe_add(stdscr, top + 2 + idx, left + 2, text, curses.A_REVERSE)
+
+    def _render_variant_graph_overlay(self, stdscr: curses.window, cp: int) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(14, h - 2)
+        top = max(1, (h - box_h) // 2)
+        left = 1
+        box_w = w - 2
+        for y in range(top, top + box_h):
+            self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
+
+        graph = db_query.variant_graph(self.conn, cp, depth=2, max_nodes=32)
+        self._safe_add(stdscr, top + 1, left + 2, "Variant graph (g to close)", curses.A_REVERSE)
+        self._safe_add(
+            stdscr,
+            top + 2,
+            left + 2,
+            f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}",
+            curses.A_REVERSE,
+        )
+        max_rows = box_h - 4
+        for idx, (src, kind, dst) in enumerate(graph["edges"][:max_rows]):
+            text = f"U+{src:04X} -{kind}-> U+{dst:04X}"
+            self._safe_add(stdscr, top + 3 + idx, left + 2, text, curses.A_REVERSE)
+
+
+def run_tui(conn: sqlite3.Connection, normalizer_name: str = "default") -> None:
+    app = TuiApp(conn, normalizer_name=normalizer_name)
     curses.wrapper(app.run)

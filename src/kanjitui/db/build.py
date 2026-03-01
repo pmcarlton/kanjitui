@@ -341,20 +341,63 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                     "INSERT INTO chars(cp, ch, radical, strokes, freq, sources) VALUES(?,?,?,?,?,?)",
                     (cp, record.ch, record.radical, record.strokes, record.freq, sources),
                 )
+                unihan_record = unihan.get(cp)
+                kanjidic_record = kanjidic.get(cp)
+                unihan_cn_num = {
+                    normalize_pinyin_for_search(pinyin_marked_to_numbered(value))
+                    for value in (unihan_record.cn_pinyin_marked if unihan_record else [])
+                }
+                cedict_cn_num = {
+                    normalize_pinyin_for_search(value) for value in cn_char_pinyin_num.get(cp, set())
+                }
+                provenance_seen: set[tuple[str, str, str]] = set()
+
+                def add_provenance(field: str, value: str, source: str, confidence: float) -> None:
+                    key = (field, value, source)
+                    if key in provenance_seen:
+                        return
+                    provenance_seen.add(key)
+                    conn.execute(
+                        "INSERT INTO field_provenance(cp, field, value, source, confidence) VALUES(?,?,?,?,?)",
+                        (cp, field, value, source, confidence),
+                    )
+
+                if record.radical is not None:
+                    if unihan_record and unihan_record.radical == record.radical:
+                        add_provenance("radical", str(record.radical), "unihan", 0.85)
+                    if kanjidic_record and kanjidic_record.radical == record.radical:
+                        add_provenance("radical", str(record.radical), "kanjidic2", 0.95)
+                if record.strokes is not None:
+                    if unihan_record and unihan_record.strokes == record.strokes:
+                        add_provenance("strokes", str(record.strokes), "unihan", 0.85)
+                    if kanjidic_record and kanjidic_record.strokes == record.strokes:
+                        add_provenance("strokes", str(record.strokes), "kanjidic2", 0.95)
 
                 for idx, reading in enumerate(record.jp_on, start=1):
                     conn.execute(
                         "INSERT INTO jp_readings(cp, type, reading, rank) VALUES(?,?,?,?)",
                         (cp, "on", reading, idx),
                     )
+                    if unihan_record and reading in unihan_record.jp_on:
+                        add_provenance("jp_on", reading, "unihan", 0.80)
+                    if kanjidic_record and reading in kanjidic_record.jp_on:
+                        add_provenance("jp_on", reading, "kanjidic2", 0.95)
                 for idx, reading in enumerate(record.jp_kun, start=1):
                     conn.execute(
                         "INSERT INTO jp_readings(cp, type, reading, rank) VALUES(?,?,?,?)",
                         (cp, "kun", reading, idx),
                     )
+                    if unihan_record and reading in unihan_record.jp_kun:
+                        add_provenance("jp_kun", reading, "unihan", 0.80)
+                    if kanjidic_record and reading in kanjidic_record.jp_kun:
+                        add_provenance("jp_kun", reading, "kanjidic2", 0.95)
 
                 for gloss in record.jp_gloss:
                     conn.execute("INSERT INTO jp_gloss(cp, gloss) VALUES(?,?)", (cp, gloss))
+                    if unihan_record and gloss in unihan_record.jp_gloss:
+                        add_provenance("jp_gloss", gloss, "unihan", 0.75)
+                    if kanjidic_record and gloss in kanjidic_record.jp_gloss:
+                        add_provenance("jp_gloss", gloss, "kanjidic2", 0.95)
 
                 for idx, num in enumerate(record.cn_pinyin_numbered, start=1):
                     marked = pinyin_numbered_to_marked(num)
@@ -362,15 +405,24 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                         "INSERT INTO cn_readings(cp, pinyin_marked, pinyin_numbered, rank) VALUES(?,?,?,?)",
                         (cp, marked, num, idx),
                     )
+                    if num in unihan_cn_num:
+                        add_provenance("cn_reading", num, "unihan", 0.80)
+                    if num in cedict_cn_num:
+                        add_provenance("cn_reading", num, "cedict", 0.75)
 
                 for gloss in record.cn_gloss:
                     conn.execute("INSERT INTO cn_gloss(cp, gloss) VALUES(?,?)", (cp, gloss))
+                    if unihan_record and gloss in unihan_record.cn_gloss:
+                        add_provenance("cn_gloss", gloss, "unihan", 0.75)
+                    if cp in cn_words:
+                        add_provenance("cn_gloss", gloss, "cedict", 0.70)
 
                 for var in record.variants:
                     conn.execute(
                         "INSERT INTO variants(cp, kind, target_cp, note) VALUES(?,?,?,?)",
                         (cp, var.kind, var.target_cp, var.note),
                     )
+                    add_provenance("variant", f"{var.kind}:U+{var.target_cp:04X}", "unihan", 0.90)
 
                 record_jp_words = jp_words.get(cp, [])[:5]
                 for rank, word in enumerate(record_jp_words, start=1):
@@ -384,6 +436,7 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                             rank,
                         ),
                     )
+                    add_provenance("jp_word", word.word, "jmdict", 0.95)
 
                 record_cn_words = cn_words.get(cp, [])[:5]
                 for rank, word in enumerate(record_cn_words, start=1):
@@ -399,6 +452,7 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                             rank,
                         ),
                     )
+                    add_provenance("cn_word", f"{word.trad}/{word.simp}", "cedict", 0.95)
 
                 jp_keys, cn_keys, gloss_keys = _build_search_keys(record, record_jp_words, record_cn_words)
                 conn.execute(

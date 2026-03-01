@@ -15,6 +15,7 @@ def _args(**overrides: object) -> argparse.Namespace:
         "data_dir": None,
         "font": None,
         "providers": None,
+        "normalizer": None,
         "font_profile_out": None,
         "build_report_out": None,
         "unihan_dir": None,
@@ -64,3 +65,8 @@ def test_resolve_build_paths_uses_data_dir_defaults(tmp_path: Path) -> None:
 def test_providers_cli_parses_csv() -> None:
     cfg = resolve_app_config(_args(providers="unihan,cedict"))
     assert cfg.providers == ("unihan", "cedict")
+
+
+def test_normalizer_default_is_set() -> None:
+    cfg = resolve_app_config(_args())
+    assert cfg.normalizer == "default"

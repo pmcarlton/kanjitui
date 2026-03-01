@@ -1,7 +1,8 @@
 from pathlib import Path
 
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
-from kanjitui.db.query import connect, get_char_detail, search
+from kanjitui.db.query import connect, get_char_detail, get_provenance, search, variant_graph
+from kanjitui.search.normalizer import get_normalizer
 
 
 def test_build_and_query_roundtrip(tmp_path: Path) -> None:
@@ -37,5 +38,14 @@ def test_build_and_query_roundtrip(tmp_path: Path) -> None:
 
         results = search(conn, "kanji")
         assert any(row["cp"] == 0x6F22 for row in results)
+
+        strict_results = search(conn, "kanji", normalizer=get_normalizer("strict"))
+        assert any(row["cp"] == 0x6F22 for row in strict_results)
+
+        provenance = get_provenance(conn, 0x6F22)
+        assert any(row[0] == "jp_on" and row[2] in {"unihan", "kanjidic2"} for row in provenance)
+
+        graph = variant_graph(conn, 0x6C49, depth=2)
+        assert any(edge[2] == 0x6F22 for edge in graph["edges"])
     finally:
         conn.close()

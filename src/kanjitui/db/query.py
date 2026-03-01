@@ -4,16 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from kanjitui.db.migrations import apply_migrations
-from kanjitui.search.normalize import (
-    contains_cjk,
-    is_kana_text,
-    looks_like_pinyin,
-    looks_like_romaji,
-    normalize_kana,
-    normalize_pinyin_for_search,
-    parse_codepoint_token,
-    romaji_to_hiragana,
-)
+from kanjitui.search.normalizer import NormalizerPlugin, get_normalizer
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -127,8 +118,8 @@ def get_char_detail(conn: sqlite3.Connection, cp: int) -> dict:
     }
 
 
-def _search_char_exact(conn: sqlite3.Connection, token: str, limit: int) -> list[dict]:
-    cps = sorted({ord(ch) for ch in token if contains_cjk(ch)})
+def _search_char_exact(conn: sqlite3.Connection, token: str, limit: int, normalizer: NormalizerPlugin) -> list[dict]:
+    cps = sorted({ord(ch) for ch in token if normalizer.contains_cjk(ch)})
     if not cps:
         return []
     placeholders = ",".join("?" for _ in cps)
@@ -176,21 +167,27 @@ def _search_sql(conn: sqlite3.Connection, sql: str, args: tuple, limit: int) -> 
     return [preview_row(conn, int(row[0])) for row in rows]
 
 
-def search(conn: sqlite3.Connection, query: str, limit: int = 200) -> list[dict]:
+def search(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int = 200,
+    normalizer: NormalizerPlugin | None = None,
+) -> list[dict]:
+    plugin = normalizer or get_normalizer("default")
     token = query.strip()
     if not token:
         return []
 
-    if contains_cjk(token):
-        return _search_char_exact(conn, token, limit)
+    if plugin.contains_cjk(token):
+        return _search_char_exact(conn, token, limit, plugin)
 
-    cp = parse_codepoint_token(token)
+    cp = plugin.parse_codepoint_token(token)
     if cp is not None:
         rows = conn.execute("SELECT cp FROM chars WHERE cp = ? LIMIT ?", (cp, limit)).fetchall()
         return [preview_row(conn, int(row[0])) for row in rows]
 
-    if is_kana_text(token):
-        kana = normalize_kana(token)
+    if plugin.is_kana_text(token):
+        kana = plugin.normalize_kana(token)
         like = f"%{kana}%"
         return _search_sql(
             conn,
@@ -206,8 +203,8 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 200) -> list[dict]
             limit,
         )
 
-    if looks_like_romaji(token):
-        kana = normalize_kana(romaji_to_hiragana(token))
+    if plugin.looks_like_romaji(token):
+        kana = plugin.normalize_kana(plugin.romaji_to_hiragana(token))
         like = f"%{kana}%"
         return _search_sql(
             conn,
@@ -223,8 +220,8 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 200) -> list[dict]
             limit,
         )
 
-    if looks_like_pinyin(token):
-        num = normalize_pinyin_for_search(token)
+    if plugin.looks_like_pinyin(token):
+        num = plugin.normalize_pinyin_for_search(token)
         like = f"%{num}%"
         return _search_sql(
             conn,
@@ -258,3 +255,48 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 200) -> list[dict]
         (like, like, like),
         limit,
     )
+
+
+def get_provenance(conn: sqlite3.Connection, cp: int, limit: int = 80) -> list[tuple]:
+    rows = conn.execute(
+        """
+        SELECT field, value, source, confidence
+        FROM field_provenance
+        WHERE cp = ?
+        ORDER BY field, source, value
+        LIMIT ?
+        """,
+        (cp, limit),
+    ).fetchall()
+    return [tuple(row) for row in rows]
+
+
+def variant_graph(conn: sqlite3.Connection, cp: int, depth: int = 2, max_nodes: int = 64) -> dict:
+    seen: set[int] = {cp}
+    frontier = [cp]
+    edges: list[tuple[int, str, int]] = []
+    level = 0
+    while frontier and level < max(depth, 1):
+        next_frontier: list[int] = []
+        for node in frontier:
+            rows = conn.execute(
+                "SELECT cp, kind, target_cp FROM variants WHERE cp = ? OR target_cp = ?",
+                (node, node),
+            ).fetchall()
+            for a, kind, b in rows:
+                src = int(a)
+                dst = int(b)
+                edges.append((src, kind, dst))
+                for candidate in (src, dst):
+                    if candidate not in seen and len(seen) < max_nodes:
+                        seen.add(candidate)
+                        next_frontier.append(candidate)
+        frontier = next_frontier
+        level += 1
+
+    node_rows = conn.execute(
+        f"SELECT cp, ch FROM chars WHERE cp IN ({','.join('?' for _ in seen)}) ORDER BY cp",
+        tuple(sorted(seen)),
+    ).fetchall()
+    nodes = [(int(row[0]), row[1]) for row in node_rows]
+    return {"nodes": nodes, "edges": sorted(set(edges))}

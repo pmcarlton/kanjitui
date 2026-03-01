@@ -15,6 +15,22 @@ class Migration:
 
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(version=1, name="initial_schema", sql=SCHEMA_SQL),
+    Migration(
+        version=2,
+        name="phase_c_provenance",
+        sql="""
+        CREATE TABLE IF NOT EXISTS field_provenance (
+            cp INTEGER NOT NULL,
+            field TEXT NOT NULL,
+            value TEXT NOT NULL,
+            source TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            FOREIGN KEY(cp) REFERENCES chars(cp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_field_provenance_cp ON field_provenance(cp);
+        CREATE INDEX IF NOT EXISTS idx_field_provenance_field ON field_provenance(field, source);
+        """,
+    ),
 )
 
 

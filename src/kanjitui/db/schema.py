@@ -89,6 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_search_gloss ON search_index(gloss_keys);
 
 
 DROP_SQL = """
+DROP TABLE IF EXISTS field_provenance;
 DROP TABLE IF EXISTS search_index;
 DROP TABLE IF EXISTS cn_words;
 DROP TABLE IF EXISTS jp_words;

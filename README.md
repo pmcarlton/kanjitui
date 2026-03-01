@@ -68,6 +68,8 @@ kanjitui --db data/db.sqlite
 - `1`: toggle JP pane
 - `2`: toggle CN pane
 - `v`: toggle variants line
+- `p`: toggle provenance overlay
+- `g`: toggle variant-graph overlay
 - `?`: help/attribution overlay
 - `q`: quit
 
@@ -79,6 +81,18 @@ kanjitui --db data/db.sqlite
 - romaji (best effort): `kanji`
 - pinyin (tone marks or numbers): `hàn`, `han4`
 - meaning substring: `Chinese character`
+
+Normalizer profiles:
+- `--normalizer default` (current default)
+- `--normalizer strict` (stricter romaji detection)
+
+## Export
+
+```bash
+kanjitui --db data/db.sqlite --export-char U+6F22 --export-format json
+kanjitui --db data/db.sqlite --export-query han4 --export-format csv
+kanjitui --db data/db.sqlite --export-query kanji --export-format json --export-out out.json
+```
 
 ## Data Layout
 
