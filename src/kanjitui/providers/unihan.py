@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from kanjitui.models import CharAnnotations, Variant
+from kanjitui.search.normalize import contains_cjk
 
 
 UNI_LINE_RE = re.compile(r"^U\+([0-9A-F]{4,6})\t([^\t]+)\t(.+)$")
@@ -81,6 +82,16 @@ def parse_unihan_dir(unihan_dir: Path) -> dict[int, CharAnnotations]:
                 for cp_match in CP_RE.finditer(raw):
                     target_cp = int(cp_match.group(1), 16)
                     record.variants.append(Variant(kind=kind, target_cp=target_cp, note=None))
+            elif field == "kIDS":
+                for ch in raw:
+                    if contains_cjk(ch):
+                        record.components.append(ord(ch))
+            elif field == "kPhonetic":
+                for cp_match in CP_RE.finditer(raw):
+                    record.phonetics.append(int(cp_match.group(1), 16))
+                for ch in raw:
+                    if contains_cjk(ch):
+                        record.phonetics.append(ord(ch))
 
     for record in data.values():
         record.jp_on = sorted(set(record.jp_on))
@@ -88,6 +99,8 @@ def parse_unihan_dir(unihan_dir: Path) -> dict[int, CharAnnotations]:
         record.cn_pinyin_marked = sorted(set(record.cn_pinyin_marked))
         record.jp_gloss = sorted(set(record.jp_gloss))
         record.cn_gloss = sorted(set(record.cn_gloss))
+        record.components = sorted(set(record.components))
+        record.phonetics = sorted(set(record.phonetics))
         record.variants = sorted(set(record.variants), key=lambda v: (v.kind, v.target_cp))
 
     return data

@@ -34,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kanjidic2", help="Path to KANJIDIC2 XML")
     parser.add_argument("--jmdict", help="Path to JMdict XML")
     parser.add_argument("--cedict", help="Path to CC-CEDICT text file")
+    parser.add_argument("--sentences", help="Path to optional sentence TSV")
     parser.add_argument("--no-font-filter", action="store_true", default=None, help="Disable font coverage filtering")
     parser.add_argument("--export-char", help="Export one character detail (char, U+XXXX, or hex cp)")
     parser.add_argument("--export-query", help="Export search results for a query")
@@ -112,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
             kanjidic2_xml=source_paths.kanjidic2_xml,
             jmdict_xml=source_paths.jmdict_xml,
             cedict_txt=source_paths.cedict_txt,
+            sentences_tsv=source_paths.sentences_tsv,
         )
         font = None if app_config.no_font_filter else app_config.font
         config = BuildConfig(

@@ -10,6 +10,7 @@ def test_default_registry_names() -> None:
     assert "kanjidic2" in names
     assert "jmdict" in names
     assert "cedict" in names
+    assert "sentences" in names
 
 
 def test_registry_resolve_enabled_dedups() -> None:

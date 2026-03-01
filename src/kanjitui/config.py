@@ -23,6 +23,7 @@ class AppConfig:
     kanjidic2_xml: Path | None
     jmdict_xml: Path | None
     cedict_txt: Path | None
+    sentences_tsv: Path | None
     providers: tuple[str, ...]
     normalizer: str
     no_font_filter: bool
@@ -36,6 +37,7 @@ class BuildSourcePaths:
     kanjidic2_xml: Path
     jmdict_xml: Path
     cedict_txt: Path
+    sentences_tsv: Path | None = None
 
 
 class ConfigError(ValueError):
@@ -264,6 +266,14 @@ def resolve_app_config(args: Any) -> AppConfig:
             default=None,
         )
     )
+    sentences_tsv = _maybe_path(
+        _resolve_value(
+            cli=args.sentences,
+            env="KANJITUI_SENTENCES",
+            file_value=build_section.get("sentences"),
+            default=None,
+        )
+    )
 
     return AppConfig(
         db_path=db_path,
@@ -277,6 +287,7 @@ def resolve_app_config(args: Any) -> AppConfig:
         kanjidic2_xml=kanjidic2_xml,
         jmdict_xml=jmdict_xml,
         cedict_txt=cedict_txt,
+        sentences_tsv=sentences_tsv,
         providers=providers,
         normalizer=normalizer,
         no_font_filter=no_font_filter,
@@ -295,4 +306,5 @@ def resolve_build_paths(config: AppConfig) -> BuildSourcePaths:
         kanjidic2_xml=config.kanjidic2_xml or (config.data_dir / "kanjidic2.xml"),
         jmdict_xml=config.jmdict_xml or (config.data_dir / "jmdict.xml"),
         cedict_txt=config.cedict_txt or (config.data_dir / "cedict_ts.u8"),
+        sentences_tsv=config.sentences_tsv or (config.data_dir / "sentences.tsv"),
     )

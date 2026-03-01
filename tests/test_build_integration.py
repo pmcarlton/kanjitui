@@ -2,6 +2,7 @@ from pathlib import Path
 
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db.query import connect, get_char_detail, get_provenance, search, variant_graph
+from kanjitui.db.query import available_frequency_profiles, get_sentences, stroke_options_by_radical
 from kanjitui.search.normalizer import get_normalizer
 
 
@@ -47,5 +48,39 @@ def test_build_and_query_roundtrip(tmp_path: Path) -> None:
 
         graph = variant_graph(conn, 0x6C49, depth=2)
         assert any(edge[2] == 0x6F22 for edge in graph["edges"])
+
+        profiles = available_frequency_profiles(conn)
+        assert "jp_kanjidic" in profiles
+        assert "cn_cedict" in profiles
+
+        stroke_opts = stroke_options_by_radical(conn, 85)
+        assert 13 in stroke_opts
+    finally:
+        conn.close()
+
+
+def test_build_with_optional_sentences_provider(tmp_path: Path) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    db_path = tmp_path / "db_sentences.sqlite"
+
+    config = BuildConfig(
+        db_path=db_path,
+        paths=BuildPaths(
+            unihan_dir=fixtures / "unihan",
+            kanjidic2_xml=fixtures / "kanjidic2.xml",
+            jmdict_xml=fixtures / "jmdict.xml",
+            cedict_txt=fixtures / "cedict_ts.u8",
+            sentences_tsv=fixtures / "sentences.tsv",
+        ),
+        font=None,
+        enabled_providers=("unihan", "kanjidic2", "jmdict", "cedict", "sentences"),
+    )
+    build_database(config)
+
+    conn = connect(db_path)
+    try:
+        rows = get_sentences(conn, 0x6F22, limit=5)
+        assert len(rows) >= 2
+        assert any(row[0] == "jp" for row in rows)
     finally:
         conn.close()

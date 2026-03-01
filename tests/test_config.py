@@ -22,6 +22,7 @@ def _args(**overrides: object) -> argparse.Namespace:
         "kanjidic2": None,
         "jmdict": None,
         "cedict": None,
+        "sentences": None,
         "no_font_filter": None,
         "verbose": None,
     }
@@ -60,6 +61,7 @@ def test_resolve_build_paths_uses_data_dir_defaults(tmp_path: Path) -> None:
     assert paths.kanjidic2_xml == tmp_path / "kanjidic2.xml"
     assert paths.jmdict_xml == tmp_path / "jmdict.xml"
     assert paths.cedict_txt == tmp_path / "cedict_ts.u8"
+    assert paths.sentences_tsv == tmp_path / "sentences.tsv"
 
 
 def test_providers_cli_parses_csv() -> None:

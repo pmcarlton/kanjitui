@@ -14,11 +14,33 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def get_ordered_cps(conn: sqlite3.Connection, ordering: str, focus: str = "jp") -> list[int]:
+def available_frequency_profiles(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("SELECT DISTINCT profile FROM frequency_scores ORDER BY profile").fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def get_ordered_cps(
+    conn: sqlite3.Connection,
+    ordering: str,
+    focus: str = "jp",
+    freq_profile: str | None = None,
+) -> list[int]:
     if ordering == "freq":
-        rows = conn.execute(
-            "SELECT cp FROM chars ORDER BY (freq IS NULL), freq, cp"
-        ).fetchall()
+        if freq_profile:
+            rows = conn.execute(
+                """
+                SELECT c.cp
+                FROM chars c
+                LEFT JOIN frequency_scores fs
+                  ON fs.cp = c.cp AND fs.profile = ?
+                ORDER BY (fs.rank IS NULL), fs.rank, (c.freq IS NULL), c.freq, c.cp
+                """,
+                (freq_profile,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT cp FROM chars ORDER BY (freq IS NULL), freq, cp"
+            ).fetchall()
     elif ordering == "radical":
         rows = conn.execute(
             "SELECT cp FROM chars ORDER BY (radical IS NULL), radical, (strokes IS NULL), strokes, cp"
@@ -56,11 +78,25 @@ def radical_counts(conn: sqlite3.Connection) -> list[tuple[int, int]]:
     return [(int(rad), int(cnt)) for rad, cnt in rows]
 
 
-def cps_by_radical(conn: sqlite3.Connection, radical: int) -> list[int]:
+def stroke_options_by_radical(conn: sqlite3.Connection, radical: int) -> list[int]:
     rows = conn.execute(
-        "SELECT cp FROM chars WHERE radical = ? ORDER BY (strokes IS NULL), strokes, cp",
+        "SELECT DISTINCT strokes FROM chars WHERE radical = ? AND strokes IS NOT NULL ORDER BY strokes",
         (radical,),
     ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def cps_by_radical(conn: sqlite3.Connection, radical: int, stroke_filter: int | None = None) -> list[int]:
+    if stroke_filter is None:
+        rows = conn.execute(
+            "SELECT cp FROM chars WHERE radical = ? ORDER BY (strokes IS NULL), strokes, cp",
+            (radical,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT cp FROM chars WHERE radical = ? AND strokes = ? ORDER BY cp",
+            (radical, stroke_filter),
+        ).fetchall()
     return [int(row[0]) for row in rows]
 
 
@@ -116,6 +152,64 @@ def get_char_detail(conn: sqlite3.Connection, cp: int) -> dict:
         "jp_words": [tuple(row) for row in jp_words],
         "cn_words": [tuple(row) for row in cn_words],
     }
+
+
+def get_components(conn: sqlite3.Connection, cp: int) -> list[tuple[int, str]]:
+    rows = conn.execute(
+        """
+        SELECT cmp.component_cp, COALESCE(c2.ch, '')
+        FROM components cmp
+        LEFT JOIN chars c2 ON c2.cp = cmp.component_cp
+        WHERE cp = ?
+        ORDER BY cmp.component_cp
+        """,
+        (cp,),
+    ).fetchall()
+    return [(int(row[0]), row[1] or chr(int(row[0]))) for row in rows]
+
+
+def get_phonetic_series(conn: sqlite3.Connection, cp: int, limit: int = 80) -> list[tuple[int, str, str]]:
+    series_rows = conn.execute(
+        "SELECT DISTINCT series_key FROM phonetic_series WHERE cp = ? LIMIT 4",
+        (cp,),
+    ).fetchall()
+    keys = [str(row[0]) for row in series_rows]
+    if not keys:
+        own_key = f"U+{cp:04X}"
+        keys_rows = conn.execute(
+            "SELECT DISTINCT series_key FROM phonetic_series WHERE series_key = ? LIMIT 1",
+            (own_key,),
+        ).fetchall()
+        keys = [str(row[0]) for row in keys_rows]
+    if not keys:
+        return []
+    placeholders = ",".join("?" for _ in keys)
+    rows = conn.execute(
+        f"""
+        SELECT ps.cp, COALESCE(c.ch, ''), ps.series_key
+        FROM phonetic_series ps
+        LEFT JOIN chars c ON c.cp = ps.cp
+        WHERE ps.series_key IN ({placeholders})
+        ORDER BY ps.series_key, ps.cp
+        LIMIT ?
+        """,
+        (*keys, limit),
+    ).fetchall()
+    return [(int(row[0]), row[1] or chr(int(row[0])), str(row[2])) for row in rows]
+
+
+def get_sentences(conn: sqlite3.Connection, cp: int, limit: int = 5) -> list[tuple]:
+    rows = conn.execute(
+        """
+        SELECT lang, text, reading, gloss, source, license, rank
+        FROM sentences
+        WHERE cp = ?
+        ORDER BY lang, rank
+        LIMIT ?
+        """,
+        (cp, limit),
+    ).fetchall()
+    return [tuple(row) for row in rows]
 
 
 def _search_char_exact(conn: sqlite3.Connection, token: str, limit: int, normalizer: NormalizerPlugin) -> list[dict]:

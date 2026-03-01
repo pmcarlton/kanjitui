@@ -63,13 +63,17 @@ kanjitui --db data/db.sqlite
 - `Home`/`End`: first/last in ordering
 - `Tab`: switch JP/CN focus
 - `O`: cycle ordering (`freq` -> `radical` -> `reading` -> `codepoint`)
+- `F`: cycle frequency profile for `freq` ordering
 - `/`: search overlay
 - `r`: radical browser overlay
 - `1`: toggle JP pane
 - `2`: toggle CN pane
+- `3`: toggle sentence pane
 - `v`: toggle variants line
 - `p`: toggle provenance overlay
 - `g`: toggle variant-graph overlay
+- `c`: toggle component overlay
+- `s`: toggle phonetic-series overlay
 - `?`: help/attribution overlay
 - `q`: quit
 
@@ -93,6 +97,18 @@ kanjitui --db data/db.sqlite --export-char U+6F22 --export-format json
 kanjitui --db data/db.sqlite --export-query han4 --export-format csv
 kanjitui --db data/db.sqlite --export-query kanji --export-format json --export-out out.json
 ```
+
+Optional sentence examples provider:
+
+```bash
+kanjitui --build \
+  --providers unihan,kanjidic2,jmdict,cedict,sentences \
+  --sentences data/raw/sentences.tsv \
+  --db data/db.sqlite
+```
+
+Sentence TSV format (tab-separated):
+`cp_hex\tlang\ttext\treading\tgloss\tsource\tlicense`
 
 ## Data Layout
 
@@ -135,3 +151,4 @@ kanjitui --config path/to/kanjitui.toml
 - Romaji conversion uses a lightweight Hepburn-ish mapping.
 - Example-word ranking uses heuristics (not corpus frequencies).
 - If font coverage cannot be computed, build can run with no font filter.
+- Component/phonetic series quality depends on available Unihan fields.

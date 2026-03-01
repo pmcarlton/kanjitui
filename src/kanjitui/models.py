@@ -23,6 +23,8 @@ class CharAnnotations:
     cn_pinyin_marked: list[str] = field(default_factory=list)
     cn_pinyin_numbered: list[str] = field(default_factory=list)
     cn_gloss: list[str] = field(default_factory=list)
+    components: list[int] = field(default_factory=list)
+    phonetics: list[int] = field(default_factory=list)
     variants: list[Variant] = field(default_factory=list)
     sources: set[str] = field(default_factory=set)
 

@@ -31,6 +31,51 @@ MIGRATIONS: tuple[Migration, ...] = (
         CREATE INDEX IF NOT EXISTS idx_field_provenance_field ON field_provenance(field, source);
         """,
     ),
+    Migration(
+        version=3,
+        name="phase_d_analysis_tables",
+        sql="""
+        CREATE TABLE IF NOT EXISTS components (
+            cp INTEGER NOT NULL,
+            component_cp INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'ids',
+            source TEXT NOT NULL DEFAULT 'unihan',
+            FOREIGN KEY(cp) REFERENCES chars(cp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_components_cp ON components(cp);
+
+        CREATE TABLE IF NOT EXISTS phonetic_series (
+            series_key TEXT NOT NULL,
+            cp INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'unihan',
+            FOREIGN KEY(cp) REFERENCES chars(cp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_phonetic_series_key ON phonetic_series(series_key);
+        CREATE INDEX IF NOT EXISTS idx_phonetic_series_cp ON phonetic_series(cp);
+
+        CREATE TABLE IF NOT EXISTS frequency_scores (
+            cp INTEGER NOT NULL,
+            profile TEXT NOT NULL,
+            score REAL NOT NULL,
+            rank INTEGER NOT NULL,
+            FOREIGN KEY(cp) REFERENCES chars(cp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_frequency_profile_rank ON frequency_scores(profile, rank, cp);
+
+        CREATE TABLE IF NOT EXISTS sentences (
+            cp INTEGER NOT NULL,
+            lang TEXT NOT NULL,
+            text TEXT NOT NULL,
+            reading TEXT,
+            gloss TEXT,
+            source TEXT,
+            license TEXT,
+            rank INTEGER NOT NULL,
+            FOREIGN KEY(cp) REFERENCES chars(cp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sentences_cp_lang ON sentences(cp, lang, rank);
+        """,
+    ),
 )
 
 

@@ -7,6 +7,7 @@ from typing import Any, Callable
 from kanjitui.providers.cedict import parse_cedict
 from kanjitui.providers.jmdict import parse_jmdict
 from kanjitui.providers.kanjidic2 import parse_kanjidic2
+from kanjitui.providers.sentences import parse_sentences_tsv
 from kanjitui.providers.unihan import parse_unihan_dir
 
 
@@ -60,14 +61,20 @@ class ProviderRegistry:
         required: list[Path] = []
         for name in self.resolve_enabled(enabled):
             spec = self.get(name)
-            required.append(spec.path_getter(paths))
+            provider_path = spec.path_getter(paths)
+            if provider_path is None:
+                raise FileNotFoundError(f"Provider path is not configured for '{name}'")
+            required.append(provider_path)
         return required
 
     def load_selected(self, enabled: tuple[str, ...] | list[str], paths: Any) -> dict[str, Any]:
         loaded: dict[str, Any] = {}
         for name in self.resolve_enabled(enabled):
             spec = self.get(name)
-            loaded[name] = spec.loader(spec.path_getter(paths))
+            provider_path = spec.path_getter(paths)
+            if provider_path is None:
+                raise FileNotFoundError(f"Provider path is not configured for '{name}'")
+            loaded[name] = spec.loader(provider_path)
         return loaded
 
 
@@ -97,6 +104,12 @@ def default_build_registry() -> ProviderRegistry:
                 path_getter=lambda p: p.cedict_txt,
                 loader=parse_cedict,
                 description="CC-CEDICT",
+            ),
+            ProviderSpec(
+                name="sentences",
+                path_getter=lambda p: p.sentences_tsv,
+                loader=parse_sentences_tsv,
+                description="Optional sentence TSV",
             ),
         ]
     )

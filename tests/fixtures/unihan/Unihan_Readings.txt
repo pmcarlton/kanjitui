@@ -2,6 +2,8 @@ U+6F22	kDefinition	Han; Chinese
 U+6F22	kJapaneseOn	カン
 U+6F22	kJapaneseKun	から
 U+6F22	kMandarin	han4
+U+6F22	kIDS	⿰氵𦰩
+U+6F22	kPhonetic	U+8A3E
 U+5B57	kDefinition	character; word
 U+5B57	kJapaneseOn	ジ
 U+5B57	kMandarin	zi4

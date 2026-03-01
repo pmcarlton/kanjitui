@@ -32,6 +32,7 @@ class BuildPaths:
     kanjidic2_xml: Path
     jmdict_xml: Path
     cedict_txt: Path
+    sentences_tsv: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,7 @@ def default_build_paths(data_dir: Path) -> BuildPaths:
         kanjidic2_xml=data_dir / "kanjidic2.xml",
         jmdict_xml=data_dir / "jmdict.xml",
         cedict_txt=data_dir / "cedict_ts.u8",
+        sentences_tsv=data_dir / "sentences.tsv",
     )
 
 
@@ -137,9 +139,12 @@ def _collect_jp_words(entries: list[JMDictEntry]) -> dict[int, list[JpWordEntry]
     return out
 
 
-def _collect_cn_words(entries: list[CEDICTEntry]) -> tuple[dict[int, list[CnWordEntry]], dict[int, set[str]]]:
+def _collect_cn_words(
+    entries: list[CEDICTEntry],
+) -> tuple[dict[int, list[CnWordEntry]], dict[int, set[str]], dict[int, int]]:
     candidates: dict[int, list[tuple[int, CnWordEntry]]] = defaultdict(list)
     char_to_pinyin_num: dict[int, set[str]] = defaultdict(set)
+    char_occurrence_count: dict[int, int] = defaultdict(int)
 
     for entry in entries:
         gloss = entry.glosses[0] if entry.glosses else ""
@@ -158,6 +163,7 @@ def _collect_cn_words(entries: list[CEDICTEntry]) -> tuple[dict[int, list[CnWord
                 continue
             cp = ord(ch)
             candidates[cp].append((score, item))
+            char_occurrence_count[cp] += 1
 
             for syllable in _extract_aligned_syllables(entry.trad, entry.pinyin_numbered, ch):
                 char_to_pinyin_num[cp].add(syllable)
@@ -179,7 +185,7 @@ def _collect_cn_words(entries: list[CEDICTEntry]) -> tuple[dict[int, list[CnWord
                 break
         out[cp] = dedup
 
-    return out, char_to_pinyin_num
+    return out, char_to_pinyin_num, dict(char_occurrence_count)
 
 
 def _nfc(value: str | None) -> str | None:
@@ -212,6 +218,8 @@ def _merge_chars(
             record.jp_gloss.extend(source_record.jp_gloss)
             record.cn_pinyin_marked.extend(source_record.cn_pinyin_marked)
             record.cn_gloss.extend(source_record.cn_gloss)
+            record.components.extend(source_record.components)
+            record.phonetics.extend(source_record.phonetics)
             record.variants.extend(source_record.variants)
             record.sources.update(source_record.sources)
 
@@ -239,6 +247,8 @@ def _merge_chars(
             set(normalize_pinyin_for_search(x) for x in record.cn_pinyin_numbered if x)
         )
         record.cn_gloss = sorted(set(_nfc(x) for x in record.cn_gloss if x))
+        record.components = sorted(set(record.components))
+        record.phonetics = sorted(set(record.phonetics))
         record.variants = sorted(set(record.variants), key=lambda v: (v.kind, v.target_cp))
 
         merged[cp] = record
@@ -254,6 +264,8 @@ def _has_annotation(record: CharAnnotations) -> bool:
         or record.cn_pinyin_marked
         or record.cn_pinyin_numbered
         or record.cn_gloss
+        or record.components
+        or record.phonetics
         or record.variants
     )
 
@@ -297,9 +309,17 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
     kanjidic = loaded.get("kanjidic2", {})
     jmdict = loaded.get("jmdict", [])
     cedict = loaded.get("cedict", [])
+    sentences = loaded.get("sentences", [])
 
     jp_words = _collect_jp_words(jmdict)
-    cn_words, cn_char_pinyin_num = _collect_cn_words(cedict)
+    cn_words, cn_char_pinyin_num, cn_occurrence = _collect_cn_words(cedict)
+    sentences_by_cp: dict[int, list] = defaultdict(list)
+    for entry in sentences:
+        sentences_by_cp[entry.cp].append(entry)
+    for cp in list(sentences_by_cp.keys()):
+        sentences_by_cp[cp] = sorted(
+            sentences_by_cp[cp], key=lambda row: (row.lang, row.text, row.reading, row.gloss)
+        )[:6]
 
     merged = _merge_chars(unihan, kanjidic, jp_words, cn_words, cn_char_pinyin_num)
 
@@ -325,6 +345,8 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
     try:
         with conn:
             _ = rebuild_schema(conn)
+            jp_freq_candidates: list[tuple[int, int]] = []
+            cn_freq_candidates: list[tuple[int, int]] = []
 
             for cp, record in sorted(merged.items()):
                 if not _has_annotation(record):
@@ -372,6 +394,12 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                         add_provenance("strokes", str(record.strokes), "unihan", 0.85)
                     if kanjidic_record and kanjidic_record.strokes == record.strokes:
                         add_provenance("strokes", str(record.strokes), "kanjidic2", 0.95)
+
+                if record.freq is not None:
+                    jp_freq_candidates.append((cp, record.freq))
+                cn_count = cn_occurrence.get(cp, 0)
+                if cn_count > 0:
+                    cn_freq_candidates.append((cp, cn_count))
 
                 for idx, reading in enumerate(record.jp_on, start=1):
                     conn.execute(
@@ -424,6 +452,21 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                     )
                     add_provenance("variant", f"{var.kind}:U+{var.target_cp:04X}", "unihan", 0.90)
 
+                for component_cp in record.components:
+                    conn.execute(
+                        "INSERT INTO components(cp, component_cp, kind, source) VALUES(?,?,?,?)",
+                        (cp, component_cp, "ids", "unihan"),
+                    )
+                    add_provenance("component", f"U+{component_cp:04X}", "unihan", 0.70)
+
+                for phonetic_cp in record.phonetics:
+                    series_key = f"U+{phonetic_cp:04X}"
+                    conn.execute(
+                        "INSERT INTO phonetic_series(series_key, cp, source) VALUES(?,?,?)",
+                        (series_key, cp, "unihan"),
+                    )
+                    add_provenance("phonetic", series_key, "unihan", 0.70)
+
                 record_jp_words = jp_words.get(cp, [])[:5]
                 for rank, word in enumerate(record_jp_words, start=1):
                     conn.execute(
@@ -454,10 +497,43 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
                     )
                     add_provenance("cn_word", f"{word.trad}/{word.simp}", "cedict", 0.95)
 
+                sentence_rows = sentences_by_cp.get(cp, [])
+                sentence_rank = 1
+                for sentence in sentence_rows:
+                    conn.execute(
+                        "INSERT INTO sentences(cp, lang, text, reading, gloss, source, license, rank) VALUES(?,?,?,?,?,?,?,?)",
+                        (
+                            cp,
+                            sentence.lang,
+                            sentence.text,
+                            sentence.reading,
+                            sentence.gloss,
+                            sentence.source,
+                            sentence.license,
+                            sentence_rank,
+                        ),
+                    )
+                    add_provenance("sentence", sentence.text, "sentences", 0.90)
+                    sentence_rank += 1
+
                 jp_keys, cn_keys, gloss_keys = _build_search_keys(record, record_jp_words, record_cn_words)
                 conn.execute(
                     "INSERT INTO search_index(cp, jp_keys, cn_keys, gloss_keys) VALUES(?,?,?,?)",
                     (cp, jp_keys, cn_keys, gloss_keys),
+                )
+
+            jp_ranked = sorted(jp_freq_candidates, key=lambda row: (row[1], row[0]))
+            for rank, (cp, freq) in enumerate(jp_ranked, start=1):
+                conn.execute(
+                    "INSERT INTO frequency_scores(cp, profile, score, rank) VALUES(?,?,?,?)",
+                    (cp, "jp_kanjidic", float(freq), rank),
+                )
+
+            cn_ranked = sorted(cn_freq_candidates, key=lambda row: (-row[1], row[0]))
+            for rank, (cp, count) in enumerate(cn_ranked, start=1):
+                conn.execute(
+                    "INSERT INTO frequency_scores(cp, profile, score, rank) VALUES(?,?,?,?)",
+                    (cp, "cn_cedict", float(count), rank),
                 )
 
     finally:

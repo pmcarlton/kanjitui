@@ -20,15 +20,22 @@ class TuiApp:
 
         self.focus = "jp"
         self.ordering_idx = 0
-        self.ordered_cps = db_query.get_ordered_cps(conn, ORDERINGS[self.ordering_idx], self.focus)
+        self.freq_profiles = db_query.available_frequency_profiles(conn)
+        self.freq_profile_idx = 0
+        self.ordered_cps = db_query.get_ordered_cps(
+            conn, ORDERINGS[self.ordering_idx], self.focus, self.current_freq_profile
+        )
         self.pos = 0
 
         self.show_jp = True
         self.show_cn = True
+        self.show_sentences = True
         self.show_variants = True
         self.show_help = False
         self.show_provenance = False
         self.show_variant_graph = False
+        self.show_components = False
+        self.show_phonetic = False
 
         self.message = "Ready"
 
@@ -44,6 +51,9 @@ class TuiApp:
         self.radical_idx = 0
         self.radical_results: list[int] | None = None
         self.radical_result_idx = 0
+        self.radical_selected: int | None = None
+        self.radical_stroke_options: list[int | None] = [None]
+        self.radical_stroke_idx = 0
 
         self.router = KeyRouter(self._current_mode, self._handle_normal_key)
         self.router.register("search", self._handle_search_key)
@@ -56,9 +66,20 @@ class TuiApp:
         self.pos = max(0, min(self.pos, len(self.ordered_cps) - 1))
         return self.ordered_cps[self.pos]
 
+    @property
+    def current_freq_profile(self) -> str | None:
+        if not self.freq_profiles:
+            return None
+        return self.freq_profiles[self.freq_profile_idx]
+
     def _refresh_ordering(self) -> None:
         current = self.current_cp
-        self.ordered_cps = db_query.get_ordered_cps(self.conn, ORDERINGS[self.ordering_idx], self.focus)
+        self.ordered_cps = db_query.get_ordered_cps(
+            self.conn,
+            ORDERINGS[self.ordering_idx],
+            self.focus,
+            self.current_freq_profile,
+        )
         if current is None or not self.ordered_cps:
             self.pos = 0
             return
@@ -119,7 +140,20 @@ class TuiApp:
         if key in (ord("O"), ord("o")):
             self.ordering_idx = (self.ordering_idx + 1) % len(ORDERINGS)
             self._refresh_ordering()
-            self.message = f"Order: {ORDERINGS[self.ordering_idx]}"
+            if ORDERINGS[self.ordering_idx] == "freq" and self.current_freq_profile:
+                self.message = f"Order: freq ({self.current_freq_profile})"
+            else:
+                self.message = f"Order: {ORDERINGS[self.ordering_idx]}"
+            return True
+
+        if key in (ord("F"),):
+            if self.freq_profiles:
+                self.freq_profile_idx = (self.freq_profile_idx + 1) % len(self.freq_profiles)
+                if ORDERINGS[self.ordering_idx] == "freq":
+                    self._refresh_ordering()
+                self.message = f"Freq profile: {self.current_freq_profile}"
+            else:
+                self.message = "No frequency profiles available"
             return True
 
         if key == ord("1"):
@@ -127,6 +161,9 @@ class TuiApp:
             return True
         if key == ord("2"):
             self.show_cn = not self.show_cn
+            return True
+        if key == ord("3"):
+            self.show_sentences = not self.show_sentences
             return True
         if key in (ord("v"), ord("V")):
             self.show_variants = not self.show_variants
@@ -138,6 +175,16 @@ class TuiApp:
         if key in (ord("g"), ord("G")):
             self.show_variant_graph = not self.show_variant_graph
             self.show_provenance = False if self.show_variant_graph else self.show_provenance
+            return True
+        if key in (ord("c"), ord("C")):
+            self.show_components = not self.show_components
+            if self.show_components:
+                self.show_phonetic = False
+            return True
+        if key in (ord("s"), ord("S")):
+            self.show_phonetic = not self.show_phonetic
+            if self.show_phonetic:
+                self.show_components = False
             return True
         if key == ord("?"):
             self.show_help = not self.show_help
@@ -152,6 +199,9 @@ class TuiApp:
             self.radical_open = True
             self.radical_results = None
             self.radical_result_idx = 0
+            self.radical_selected = None
+            self.radical_stroke_options = [None]
+            self.radical_stroke_idx = 0
             return True
 
         return True
@@ -202,6 +252,7 @@ class TuiApp:
         if key == 27:  # Esc
             self.radical_open = False
             self.radical_results = None
+            self.radical_selected = None
             self.message = "Closed radical browser"
             return True
 
@@ -228,27 +279,63 @@ class TuiApp:
                 return True
             if key in (10, 13, curses.KEY_ENTER) and self.radical_numbers:
                 radical = self.radical_numbers[self.radical_idx]
-                self.radical_results = db_query.cps_by_radical(self.conn, radical)
+                self.radical_selected = radical
+                strokes = db_query.stroke_options_by_radical(self.conn, radical)
+                self.radical_stroke_options = [None] + strokes
+                self.radical_stroke_idx = 0
+                self.radical_results = db_query.cps_by_radical(self.conn, radical, stroke_filter=None)
                 self.radical_result_idx = 0
                 self.message = f"Radical {radical}: {len(self.radical_results)} chars"
                 return True
             return True
 
         if key in (curses.KEY_UP, ord("k")):
-            self.radical_result_idx = max(0, self.radical_result_idx - 1)
+            if self.radical_results:
+                self.radical_result_idx = max(0, self.radical_result_idx - 1)
             return True
         if key in (curses.KEY_DOWN, ord("j")):
-            self.radical_result_idx = min(len(self.radical_results) - 1, self.radical_result_idx + 1)
+            if self.radical_results:
+                self.radical_result_idx = min(len(self.radical_results) - 1, self.radical_result_idx + 1)
             return True
         if key in (curses.KEY_BACKSPACE, 127, 8):
             self.radical_results = None
             self.radical_result_idx = 0
+            self.radical_selected = None
+            self.radical_stroke_options = [None]
+            self.radical_stroke_idx = 0
+            return True
+        if key == ord("[") and self.radical_selected is not None:
+            self.radical_stroke_idx = max(0, self.radical_stroke_idx - 1)
+            stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
+            self.radical_results = db_query.cps_by_radical(
+                self.conn, self.radical_selected, stroke_filter=stroke_filter
+            )
+            self.radical_result_idx = 0
+            self.message = (
+                f"Radical {self.radical_selected} strokes={stroke_filter if stroke_filter is not None else 'all'} "
+                f"({len(self.radical_results)})"
+            )
+            return True
+        if key == ord("]") and self.radical_selected is not None:
+            self.radical_stroke_idx = min(
+                len(self.radical_stroke_options) - 1, self.radical_stroke_idx + 1
+            )
+            stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
+            self.radical_results = db_query.cps_by_radical(
+                self.conn, self.radical_selected, stroke_filter=stroke_filter
+            )
+            self.radical_result_idx = 0
+            self.message = (
+                f"Radical {self.radical_selected} strokes={stroke_filter if stroke_filter is not None else 'all'} "
+                f"({len(self.radical_results)})"
+            )
             return True
         if key in (10, 13, curses.KEY_ENTER) and self.radical_results:
             cp = self.radical_results[self.radical_result_idx]
             self._jump_to_cp(cp)
             self.radical_open = False
             self.radical_results = None
+            self.radical_selected = None
             return True
 
         return True
@@ -280,10 +367,13 @@ class TuiApp:
 
         idx = self.pos + 1
         total = len(self.ordered_cps)
+        order_label = ORDERINGS[self.ordering_idx]
+        if order_label == "freq" and self.current_freq_profile:
+            order_label = f"freq:{self.current_freq_profile}"
         header = (
             f"{detail['ch']} U+{detail['cp']:04X}  radical {detail['radical'] or '-'}  "
             f"strokes {detail['strokes'] or '-'}  [{self.focus.upper()} focus] "
-            f"({idx}/{total}) order:{ORDERINGS[self.ordering_idx]}"
+            f"({idx}/{total}) order:{order_label}"
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
 
@@ -341,6 +431,27 @@ class TuiApp:
                     y += 1
             y += 1
 
+        if self.show_sentences and y < h - 5:
+            self._safe_add(stdscr, y, 0, "Sentences", 0)
+            y += 1
+            sentence_rows = db_query.get_sentences(self.conn, detail["cp"], limit=3)
+            if not sentence_rows:
+                self._safe_add(stdscr, y, 2, "(no sentence examples)")
+                y += 1
+            else:
+                for lang, text, reading, gloss, source, license_name, rank in sentence_rows:
+                    line = f"{rank}. [{lang}] {text}  {reading or '-'}  {gloss or '-'}"
+                    self._safe_add(stdscr, y, 2, line)
+                    y += 1
+                    self._safe_add(
+                        stdscr,
+                        y,
+                        2,
+                        f"   source: {source or '-'} ({license_name or '-'})",
+                    )
+                    y += 1
+            y += 1
+
         if self.show_variants and y < h - 4:
             vars_text = ", ".join(
                 f"{kind}->U+{target:04X}" for kind, target, _ in detail["variants"][:8]
@@ -349,7 +460,7 @@ class TuiApp:
 
         self._render_nav_strip(stdscr, h - 2)
         status = (
-            "Arrows/jk:move Tab:focus O:order /:search r:radical 1/2/v:toggle p:prov g:graph ?:help q:quit | "
+            "Arrows/jk:move Tab:focus O/F:order /:search r:radical 1/2/3/v:toggle c/s/p/g overlays ?:help q:quit | "
             f"{self.message}"
         )
         self._safe_add(stdscr, h - 1, 0, status, curses.A_REVERSE)
@@ -360,6 +471,10 @@ class TuiApp:
             self._render_provenance_overlay(stdscr, detail["cp"])
         if self.show_variant_graph:
             self._render_variant_graph_overlay(stdscr, detail["cp"])
+        if self.show_components:
+            self._render_components_overlay(stdscr, detail["cp"])
+        if self.show_phonetic:
+            self._render_phonetic_overlay(stdscr, detail["cp"])
         if self.search_open:
             self._render_search_overlay(stdscr)
         if self.radical_open:
@@ -373,8 +488,10 @@ class TuiApp:
             "Help",
             "Right/Down/j next, Left/Up/k previous",
             "Home/End jump, Tab focus JP/CN, O order",
+            "F cycle frequency profile (if available)",
             "/ search (char, U+hex, kana, romaji, pinyin, gloss)",
             "r radical browser, 1/2 pane toggle, v variants",
+            "3 sentences, c components, s phonetic series",
             "p provenance, g variant graph, ? help, q quit",
             "Data: Unicode Unihan, EDRDG KANJIDIC2/JMdict, CC-CEDICT",
             "License details: data/licenses/",
@@ -465,7 +582,15 @@ class TuiApp:
             )
             return
 
-        self._safe_add(stdscr, top + 1, left + 2, "Radical results (Enter jump, Backspace back)", curses.A_REVERSE)
+        stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
+        stroke_label = "all" if stroke_filter is None else str(stroke_filter)
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            f"Radical results (Enter jump, Backspace back, [/] strokes={stroke_label})",
+            curses.A_REVERSE,
+        )
         max_rows = box_h - 3
         start = max(0, self.radical_result_idx - max_rows + 1)
         for offset, cp in enumerate(self.radical_results[start : start + max_rows]):
@@ -537,6 +662,40 @@ class TuiApp:
         for idx, (src, kind, dst) in enumerate(graph["edges"][:max_rows]):
             text = f"U+{src:04X} -{kind}-> U+{dst:04X}"
             self._safe_add(stdscr, top + 3 + idx, left + 2, text, curses.A_REVERSE)
+
+    def _render_components_overlay(self, stdscr: curses.window, cp: int) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(12, h - 2)
+        top = max(1, (h - box_h) // 2)
+        left = 1
+        box_w = w - 2
+        for y in range(top, top + box_h):
+            self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "Components (c to close)", curses.A_REVERSE)
+        components = db_query.get_components(self.conn, cp)
+        if not components:
+            self._safe_add(stdscr, top + 2, left + 2, "(no components)", curses.A_REVERSE)
+            return
+        for idx, (comp_cp, comp_ch) in enumerate(components[: box_h - 3]):
+            text = f"{idx + 1}. {comp_ch} U+{comp_cp:04X}"
+            self._safe_add(stdscr, top + 2 + idx, left + 2, text, curses.A_REVERSE)
+
+    def _render_phonetic_overlay(self, stdscr: curses.window, cp: int) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(12, h - 2)
+        top = max(1, (h - box_h) // 2)
+        left = 1
+        box_w = w - 2
+        for y in range(top, top + box_h):
+            self._safe_add(stdscr, y, left, " " * box_w, curses.A_REVERSE)
+        self._safe_add(stdscr, top + 1, left + 2, "Phonetic series (s to close)", curses.A_REVERSE)
+        series_rows = db_query.get_phonetic_series(self.conn, cp, limit=box_h - 3)
+        if not series_rows:
+            self._safe_add(stdscr, top + 2, left + 2, "(no phonetic series rows)", curses.A_REVERSE)
+            return
+        for idx, (member_cp, member_ch, key) in enumerate(series_rows[: box_h - 3]):
+            text = f"{idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
+            self._safe_add(stdscr, top + 2 + idx, left + 2, text, curses.A_REVERSE)
 
 
 def run_tui(conn: sqlite3.Connection, normalizer_name: str = "default") -> None:
