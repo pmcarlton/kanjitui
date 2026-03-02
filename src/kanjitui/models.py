@@ -17,6 +17,7 @@ class CharAnnotations:
     radical: int | None = None
     strokes: int | None = None
     freq: int | None = None
+    jp_grade: int | None = None
     jp_on: list[str] = field(default_factory=list)
     jp_kun: list[str] = field(default_factory=list)
     jp_gloss: list[str] = field(default_factory=list)

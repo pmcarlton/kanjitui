@@ -8,6 +8,7 @@ def test_parse_kanjidic2_sample() -> None:
     parsed = parse_kanjidic2(path)
 
     han = parsed[0x6F22]
+    assert han.jp_grade == 8
     assert han.freq == 432
     assert han.strokes == 13
     assert "カン" in han.jp_on

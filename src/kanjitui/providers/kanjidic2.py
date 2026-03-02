@@ -27,6 +27,9 @@ def parse_kanjidic2(path: Path) -> dict[int, CharAnnotations]:
             freq_text = misc.findtext("freq")
             if freq_text and freq_text.isdigit():
                 record.freq = int(freq_text)
+            grade_text = misc.findtext("grade")
+            if grade_text and grade_text.isdigit():
+                record.jp_grade = int(grade_text)
 
         radical = char_elem.find("radical")
         if radical is not None:

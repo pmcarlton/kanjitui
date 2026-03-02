@@ -25,6 +25,8 @@ class FilterState:
     jp_reading_type: str = "any"
     cn_complexity: str = "any"
     variant_class: str = "any"
+    joyo_class: str = "any"
+    has_words: str = "any"
     has_components: str = "any"
     has_phonetic: str = "any"
     stroke_bucket: str = "any"
@@ -42,6 +44,8 @@ class FilterState:
             "jp_reading_type": self.jp_reading_type,
             "cn_complexity": self.cn_complexity,
             "variant_class": self.variant_class,
+            "joyo_class": self.joyo_class,
+            "has_words": self.has_words,
             "has_components": self.has_components,
             "has_phonetic": self.has_phonetic,
             "stroke_bucket": self.stroke_bucket,
@@ -75,11 +79,15 @@ class FilterData:
     jp_on_cps: set[int] = field(default_factory=set)
     jp_kun_cps: set[int] = field(default_factory=set)
     cn_multi_cps: set[int] = field(default_factory=set)
-    variant_simplified_cps: set[int] = field(default_factory=set)
-    variant_traditional_cps: set[int] = field(default_factory=set)
+    variant_is_simplified_cps: set[int] = field(default_factory=set)
+    variant_is_traditional_cps: set[int] = field(default_factory=set)
     variant_semantic_cps: set[int] = field(default_factory=set)
     variant_compat_cps: set[int] = field(default_factory=set)
     any_variant_cps: set[int] = field(default_factory=set)
+    joyo_cps: set[int] = field(default_factory=set)
+    kyoiku_cps: set[int] = field(default_factory=set)
+    jinmeiyo_cps: set[int] = field(default_factory=set)
+    has_words_cps: set[int] = field(default_factory=set)
     components_cps: set[int] = field(default_factory=set)
     phonetic_cps: set[int] = field(default_factory=set)
     provenance_cps: set[int] = field(default_factory=set)
@@ -140,11 +148,31 @@ def filter_group_specs(freq_profiles: list[str]) -> list[FilterGroupSpec]:
             label="Variant Class",
             options=(
                 FilterOption("any", "Any"),
-                FilterOption("simplified", "Has simplified variant"),
-                FilterOption("traditional", "Has traditional variant"),
+                FilterOption("is_simplified", "Is simplified"),
+                FilterOption("is_traditional", "Is traditional"),
                 FilterOption("semantic", "Has semantic/specialized variant"),
                 FilterOption("compat", "Has compatibility variant"),
                 FilterOption("none", "No variants"),
+            ),
+        ),
+        FilterGroupSpec(
+            key="joyo_class",
+            label="Joyo Class",
+            options=(
+                FilterOption("any", "Any"),
+                FilterOption("joyo", "Joyo"),
+                FilterOption("non_joyo", "Non-Joyo"),
+                FilterOption("kyoiku", "Kyoiku (grades 1-6)"),
+                FilterOption("jinmeiyo", "Jinmeiyo"),
+            ),
+        ),
+        FilterGroupSpec(
+            key="has_words",
+            label="Word Examples",
+            options=(
+                FilterOption("any", "Any"),
+                FilterOption("yes", "Has words"),
+                FilterOption("no", "No words"),
             ),
         ),
         FilterGroupSpec(
@@ -346,14 +374,29 @@ def _variant_match(cp: int, state: FilterState, data: FilterData) -> bool:
         return True
     if mode == "none":
         return cp not in data.any_variant_cps
-    if mode == "simplified":
-        return cp in data.variant_simplified_cps
-    if mode == "traditional":
-        return cp in data.variant_traditional_cps
+    if mode == "is_simplified":
+        return cp in data.variant_is_simplified_cps
+    if mode == "is_traditional":
+        return cp in data.variant_is_traditional_cps
     if mode == "semantic":
         return cp in data.variant_semantic_cps
     if mode == "compat":
         return cp in data.variant_compat_cps
+    return True
+
+
+def _joyo_match(cp: int, state: FilterState, data: FilterData) -> bool:
+    mode = state.joyo_class
+    if mode == "any":
+        return True
+    if mode == "joyo":
+        return cp in data.joyo_cps
+    if mode == "non_joyo":
+        return cp not in data.joyo_cps
+    if mode == "kyoiku":
+        return cp in data.kyoiku_cps
+    if mode == "jinmeiyo":
+        return cp in data.jinmeiyo_cps
     return True
 
 
@@ -376,6 +419,10 @@ def apply_filter_state(
         if not _cn_complexity_match(cp, state, data):
             continue
         if not _variant_match(cp, state, data):
+            continue
+        if not _joyo_match(cp, state, data):
+            continue
+        if not _tri_state_match(state.has_words, cp, data.has_words_cps):
             continue
         if not _tri_state_match(state.has_components, cp, data.components_cps):
             continue

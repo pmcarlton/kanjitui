@@ -353,6 +353,23 @@ class TuiApp:
         self._refresh_ordering()
         self.message = f"Filter set: {group_key}={value} ({len(self.ordered_cps)} matches)"
 
+    def _move_filter_group(self, delta: int) -> None:
+        if not self.filter_options:
+            return
+        current_group = self.filter_options[self.filter_idx][1]
+        idx = self.filter_idx
+        step = 1 if delta > 0 else -1
+        while 0 <= idx + step < len(self.filter_options):
+            idx += step
+            group = self.filter_options[idx][1]
+            if group != current_group:
+                if step > 0:
+                    # Jump to first option of the next group.
+                    while idx - 1 >= 0 and self.filter_options[idx - 1][1] == group:
+                        idx -= 1
+                self.filter_idx = idx
+                return
+
     def _clear_filters(self) -> None:
         self.filter_state = FilterState()
         self.hide_no_reading = False
@@ -1026,6 +1043,12 @@ class TuiApp:
         if key in (curses.KEY_DOWN, ord("j")):
             if self.filter_options:
                 self.filter_idx = min(len(self.filter_options) - 1, self.filter_idx + 1)
+            return True
+        if key in (KEY_SHIFT_UP,):
+            self._move_filter_group(-1)
+            return True
+        if key in (KEY_SHIFT_DOWN,):
+            self._move_filter_group(+1)
             return True
         if key in (ord(" "), 10, 13, curses.KEY_ENTER):
             if not self.filter_options:
@@ -1907,7 +1930,7 @@ class TuiApp:
             stdscr,
             top + 1,
             left + 2,
-            "Up/Down move  Space/Enter select  c clear  w save preset  p presets  Esc close",
+            "Up/Down move  Shift-Up/Down jump group  Space/Enter select  c clear  w save preset  p presets  Esc close",
             curses.A_BOLD,
         )
 

@@ -42,6 +42,16 @@ def test_apply_filter_state_by_reading_and_variants(tmp_path: Path) -> None:
         res_none = apply_filter_state(ordered, no_variant, data)
         assert res_none
         assert all(cp not in data.any_variant_cps for cp in res_none)
+
+        simp = FilterState(variant_class="is_simplified")
+        res_simp = apply_filter_state(ordered, simp, data)
+        assert res_simp
+        assert all(cp in data.variant_is_simplified_cps for cp in res_simp)
+
+        trad = FilterState(variant_class="is_traditional")
+        res_trad = apply_filter_state(ordered, trad, data)
+        assert res_trad
+        assert all(cp in data.variant_is_traditional_cps for cp in res_trad)
     finally:
         conn.close()
 
@@ -57,5 +67,25 @@ def test_apply_filter_state_frequency_unranked(tmp_path: Path) -> None:
         assert result
         ranks = data.frequency_ranks.get("jp_kanjidic", {})
         assert all(cp not in ranks for cp in result)
+    finally:
+        conn.close()
+
+
+def test_apply_filter_state_joyo_and_has_words(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        ordered = [int(row[0]) for row in conn.execute("SELECT cp FROM chars ORDER BY cp").fetchall()]
+        data = load_filter_data(conn)
+
+        joyo = FilterState(joyo_class="joyo")
+        joyo_rows = apply_filter_state(ordered, joyo, data)
+        assert joyo_rows
+        assert all(cp in data.joyo_cps for cp in joyo_rows)
+
+        has_words = FilterState(has_words="yes")
+        word_rows = apply_filter_state(ordered, has_words, data)
+        assert word_rows
+        assert all(cp in data.has_words_cps for cp in word_rows)
     finally:
         conn.close()

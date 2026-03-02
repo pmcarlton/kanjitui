@@ -214,6 +214,7 @@ def _merge_chars(
             record.radical = record.radical or source_record.radical
             record.strokes = record.strokes or source_record.strokes
             record.freq = record.freq or source_record.freq
+            record.jp_grade = record.jp_grade or source_record.jp_grade
             record.jp_on.extend(source_record.jp_on)
             record.jp_kun.extend(source_record.jp_kun)
             record.jp_gloss.extend(source_record.jp_gloss)
@@ -412,6 +413,15 @@ def build_database(
 
                 if record.freq is not None:
                     jp_freq_candidates.append((cp, record.freq))
+                if record.jp_grade is not None:
+                    add_provenance("jp_grade", str(record.jp_grade), "kanjidic2", 0.99)
+                    if record.jp_grade in {1, 2, 3, 4, 5, 6}:
+                        add_provenance("jp_class", "kyoiku", "kanjidic2", 0.99)
+                        add_provenance("jp_class", "joyo", "kanjidic2", 0.99)
+                    elif record.jp_grade == 8:
+                        add_provenance("jp_class", "joyo", "kanjidic2", 0.99)
+                    elif record.jp_grade in {9, 10}:
+                        add_provenance("jp_class", "jinmeiyo", "kanjidic2", 0.99)
                 cn_count = cn_occurrence.get(cp, 0)
                 if cn_count > 0:
                     cn_freq_candidates.append((cp, cn_count))

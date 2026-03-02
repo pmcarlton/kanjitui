@@ -93,6 +93,8 @@ def reading_cp_sets(conn: sqlite3.Connection) -> tuple[set[int], set[int]]:
 
 def load_filter_data(conn: sqlite3.Connection) -> FilterData:
     data = FilterData()
+    raw_is_simplified: set[int] = set()
+    raw_is_traditional: set[int] = set()
     rows = conn.execute("SELECT cp, strokes, sources FROM chars").fetchall()
     for row in rows:
         cp = int(row[0])
@@ -126,19 +128,25 @@ def load_filter_data(conn: sqlite3.Connection) -> FilterData:
         if int(cnt) > 1:
             data.cn_multi_cps.add(icp)
 
-    var_rows = conn.execute("SELECT cp, kind FROM variants").fetchall()
+    var_rows = conn.execute("SELECT cp, kind, target_cp FROM variants").fetchall()
     for row in var_rows:
         cp = int(row[0])
         kind = str(row[1] or "")
+        target = int(row[2])
         data.any_variant_cps.add(cp)
+        data.any_variant_cps.add(target)
         if kind == "simplified":
-            data.variant_simplified_cps.add(cp)
+            raw_is_traditional.add(cp)
+            raw_is_simplified.add(target)
         if kind == "traditional":
-            data.variant_traditional_cps.add(cp)
+            raw_is_simplified.add(cp)
+            raw_is_traditional.add(target)
         if kind in {"semantic", "specialized"}:
             data.variant_semantic_cps.add(cp)
         if kind == "compat":
             data.variant_compat_cps.add(cp)
+    data.variant_is_simplified_cps = raw_is_simplified - raw_is_traditional
+    data.variant_is_traditional_cps = raw_is_traditional - raw_is_simplified
 
     data.components_cps = {int(row[0]) for row in conn.execute("SELECT DISTINCT cp FROM components").fetchall()}
     data.phonetic_cps = {int(row[0]) for row in conn.execute("SELECT DISTINCT cp FROM phonetic_series").fetchall()}
@@ -152,6 +160,33 @@ def load_filter_data(conn: sqlite3.Connection) -> FilterData:
         p = str(profile)
         ranks = data.frequency_ranks.setdefault(p, {})
         ranks[int(cp)] = int(rank)
+
+    words_rows = conn.execute(
+        """
+        SELECT DISTINCT cp FROM (
+            SELECT cp FROM jp_words
+            UNION
+            SELECT cp FROM cn_words
+        )
+        """
+    ).fetchall()
+    data.has_words_cps = {int(row[0]) for row in words_rows}
+
+    grade_rows = conn.execute(
+        "SELECT cp, value FROM field_provenance WHERE field = 'jp_grade' AND source = 'kanjidic2'"
+    ).fetchall()
+    for cp, value in grade_rows:
+        try:
+            grade = int(str(value))
+        except (TypeError, ValueError):
+            continue
+        icp = int(cp)
+        if grade in {1, 2, 3, 4, 5, 6, 8}:
+            data.joyo_cps.add(icp)
+        if grade in {1, 2, 3, 4, 5, 6}:
+            data.kyoiku_cps.add(icp)
+        if grade in {9, 10}:
+            data.jinmeiyo_cps.add(icp)
     return data
 
 
