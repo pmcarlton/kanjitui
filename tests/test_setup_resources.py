@@ -7,6 +7,7 @@ from kanjitui.setup_resources import (
     default_setup_selection,
     detect_available_sources,
     RuntimePaths,
+    SOURCES,
 )
 
 
@@ -51,3 +52,9 @@ def test_acknowledgements_include_edrdg_line() -> None:
     joined = "\n".join(lines)
     assert "JMdict/EDICT and KANJIDIC dictionary files" in joined
     assert "Electronic Dictionary Research and Development Group" in joined
+
+
+def test_all_sources_have_license_links() -> None:
+    for spec in SOURCES.values():
+        assert spec.license_url.startswith("http")
+        assert spec.license_label.strip()

@@ -264,6 +264,12 @@ class SetupDialog(QDialog):
         self.checkboxes: dict[str, QCheckBox] = {}
         presence = self.window._available_sources()
         defaults = set(default_setup_selection(presence))
+        source_grid = QGridLayout()
+        source_grid.addWidget(QLabel("Source", self), 0, 0)
+        source_grid.addWidget(QLabel("License / Terms", self), 0, 1)
+        source_grid.setColumnStretch(0, 3)
+        source_grid.setColumnStretch(1, 2)
+        row_idx = 1
         for key in SOURCE_ORDER:
             if key not in SOURCES:
                 continue
@@ -272,7 +278,17 @@ class SetupDialog(QDialog):
             cb = QCheckBox(f"{spec.label} ({status})", self)
             cb.setChecked(key in defaults)
             self.checkboxes[key] = cb
-            layout.addWidget(cb)
+            source_grid.addWidget(cb, row_idx, 0)
+            link = QLabel(
+                f'<a href="{spec.license_url}">{spec.license_label}</a>',
+                self,
+            )
+            link.setOpenExternalLinks(True)
+            link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            link.setToolTip(spec.license_url)
+            source_grid.addWidget(link, row_idx, 1)
+            row_idx += 1
+        layout.addLayout(source_grid)
 
         self.log = QPlainTextEdit(self)
         self.log.setReadOnly(True)

@@ -1633,7 +1633,7 @@ class TuiApp:
     def _render_setup_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
         box_h = min(22, h - 2)
-        box_w = min(110, w - 2)
+        box_w = min(132, w - 2)
         top = max(1, (h - box_h) // 2)
         left = max(1, (w - box_w) // 2)
         self._draw_box(stdscr, top, left, box_h, box_w, title="Setup (Lean Package)")
@@ -1644,8 +1644,10 @@ class TuiApp:
             "Up/Down: move  Space/Enter/1-9: toggle  d: download  a: all  n: none  Esc: close",
             curses.A_BOLD,
         )
+        self._safe_add(stdscr, top + 2, left + 2, "Source", curses.A_BOLD)
+        self._safe_add(stdscr, top + 2, left + 58, "License / Terms URL", curses.A_BOLD)
         available = self._available_sources()
-        max_rows = min(8, box_h - 8)
+        max_rows = min(8, box_h - 9)
         for row in range(max_rows):
             if row >= len(self.setup_rows):
                 break
@@ -1656,13 +1658,16 @@ class TuiApp:
             marker = "▶" if row == self.setup_idx else " "
             text = f"{marker} {row + 1}. [{checked}] {spec.label:<34}  ({status})"
             attr = curses.A_BOLD if row == self.setup_idx else 0
-            self._safe_add(stdscr, top + 2 + row, left + 2, text, attr)
+            row_y = top + 3 + row
+            self._safe_add(stdscr, row_y, left + 2, text, attr)
+            right_w = max(0, box_w - 60)
+            self._safe_add(stdscr, row_y, left + 58, spec.license_url[:right_w], curses.A_DIM)
 
-        self._safe_add(stdscr, top + 2 + max_rows, left + 2, "Logs:", curses.A_BOLD)
-        log_rows = box_h - (6 + max_rows)
+        self._safe_add(stdscr, top + 3 + max_rows, left + 2, "Logs:", curses.A_BOLD)
+        log_rows = box_h - (7 + max_rows)
         start = max(0, len(self.setup_logs) - log_rows)
         for i, line in enumerate(self.setup_logs[start : start + log_rows]):
-            self._safe_add(stdscr, top + 3 + max_rows + i, left + 2, line[: max(0, box_w - 4)])
+            self._safe_add(stdscr, top + 4 + max_rows + i, left + 2, line[: max(0, box_w - 4)])
 
     def _render_ack_overlay(self, stdscr: curses.window, startup: bool) -> None:
         h, w = stdscr.getmaxyx()

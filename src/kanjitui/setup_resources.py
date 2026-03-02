@@ -22,15 +22,47 @@ SOURCE_ORDER = ("unihan", "cedict", "kanjidic2", "jmdict", "sentences", "strokeo
 class SourceSpec:
     key: str
     label: str
+    license_url: str
+    license_label: str
 
 
 SOURCES: dict[str, SourceSpec] = {
-    "unihan": SourceSpec("unihan", "Unicode Unihan"),
-    "cedict": SourceSpec("cedict", "CC-CEDICT"),
-    "kanjidic2": SourceSpec("kanjidic2", "EDRDG KANJIDIC2"),
-    "jmdict": SourceSpec("jmdict", "EDRDG JMdict"),
-    "sentences": SourceSpec("sentences", "Tatoeba sentences.tsv"),
-    "strokeorder": SourceSpec("strokeorder", "StrokeOrder/KanjiVG stroke data"),
+    "unihan": SourceSpec(
+        "unihan",
+        "Unicode Unihan",
+        "https://www.unicode.org/copyright.html",
+        "Unicode Terms",
+    ),
+    "cedict": SourceSpec(
+        "cedict",
+        "CC-CEDICT",
+        "https://www.mdbg.net/chinese/dictionary?page=cc-cedict",
+        "CC-CEDICT License",
+    ),
+    "kanjidic2": SourceSpec(
+        "kanjidic2",
+        "EDRDG KANJIDIC2",
+        "http://www.edrdg.org/edrdg/licence.html",
+        "EDRDG Licence",
+    ),
+    "jmdict": SourceSpec(
+        "jmdict",
+        "EDRDG JMdict",
+        "http://www.edrdg.org/edrdg/licence.html",
+        "EDRDG Licence",
+    ),
+    "sentences": SourceSpec(
+        "sentences",
+        "Tatoeba sentences.tsv",
+        "https://tatoeba.org/en/terms_of_use",
+        "Tatoeba Terms",
+    ),
+    "strokeorder": SourceSpec(
+        "strokeorder",
+        "StrokeOrder/KanjiVG stroke data",
+        "https://creativecommons.org/licenses/by-sa/3.0/",
+        "CC BY-SA 3.0",
+    ),
 }
 
 
