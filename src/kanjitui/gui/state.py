@@ -254,6 +254,18 @@ class GuiState:
             self.bookmarked_cps.discard(cp)
         self.message = f"Bookmarked U+{cp:04X}" if bookmarked else f"Removed bookmark U+{cp:04X}"
 
+    def delete_bookmark(self, cp: int) -> bool:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return False
+        deleted = self.user_store.delete_bookmark(cp)
+        if deleted:
+            self.bookmarked_cps.discard(cp)
+            self.message = f"Deleted bookmark U+{cp:04X}"
+        else:
+            self.message = f"Bookmark U+{cp:04X} not found"
+        return deleted
+
     def list_bookmarks(self, limit: int = 200) -> list[tuple[int, str | None]]:
         if self.user_store is None:
             return []

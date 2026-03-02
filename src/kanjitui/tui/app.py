@@ -328,6 +328,9 @@ class TuiApp:
             self.message = "No variants to jump to"
             return False
         target = targets[self.variant_idx]
+        if target.cp not in self.ordered_cps:
+            self.message = f"Variant {target.ch} U+{target.cp:04X} is filtered out"
+            return False
         self._jump_to_cp(target.cp)
         return True
 
@@ -803,6 +806,22 @@ class TuiApp:
             self.bookmark_rows = []
             self.bookmark_idx = 0
             return True
+        if key in (ord("x"), ord("X")) and self.user_store is not None:
+            cp, _tag = self.bookmark_rows[self.bookmark_idx]
+            deleted = self.user_store.delete_bookmark(cp)
+            if deleted:
+                self.bookmarked_cps.discard(cp)
+                del self.bookmark_rows[self.bookmark_idx]
+                if not self.bookmark_rows:
+                    self.bookmark_open = False
+                    self.bookmark_idx = 0
+                    self.message = "Deleted bookmark; no bookmarks left"
+                    return True
+                self.bookmark_idx = min(self.bookmark_idx, len(self.bookmark_rows) - 1)
+                self.message = f"Deleted bookmark U+{cp:04X}"
+            else:
+                self.message = f"Bookmark U+{cp:04X} not found"
+            return True
         return True
 
     def _safe_add(self, stdscr: curses.window, y: int, x: int, text: str, attr: int = 0) -> None:
@@ -972,7 +991,10 @@ class TuiApp:
                 lines.append("(no variant targets)")
             else:
                 for idx_target, target in enumerate(targets[:10]):
-                    marker = "▶" if idx_target == self.variant_idx else " "
+                    jumpable = target.cp in self.ordered_cps
+                    marker = " "
+                    if idx_target == self.variant_idx:
+                        marker = "▶" if jumpable else "X"
                     lines.append(f"{marker} {target.ch} U+{target.cp:04X}  {target.relation}")
                 if len(targets) > 10:
                     lines.append(f"... +{len(targets) - 10} more")
@@ -1021,6 +1043,7 @@ class TuiApp:
             "Variants panel: arrows select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
             "Workspace: b toggle bookmark, B bookmarks list/jump",
+            "Bookmarks list: x deletes selected bookmark",
             "Notes: n per-glyph editor, g global editor",
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
             "CCAMC: i open glyph page",
@@ -1321,7 +1344,7 @@ class TuiApp:
             stdscr,
             top + 1,
             left + 2,
-            "Enter jump  Esc close  Up/Down select  Home/End top/bottom",
+            "Enter jump  x delete  Esc close  Up/Down select  Home/End top/bottom",
         )
         if not self.bookmark_rows:
             self._safe_add(stdscr, top + 2, left + 2, "(no bookmarks)")

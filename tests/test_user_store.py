@@ -10,8 +10,9 @@ def test_user_store_bookmark_note_query(tmp_path: Path) -> None:
     assert store.is_bookmarked(cp) is False
     assert store.toggle_bookmark(cp) is True
     assert store.is_bookmarked(cp) is True
-    assert store.toggle_bookmark(cp) is False
+    assert store.delete_bookmark(cp) is True
     assert store.is_bookmarked(cp) is False
+    assert store.delete_bookmark(cp) is False
 
     store.add_glyph_note(cp, "review this kanji")
     notes = store.get_glyph_notes(cp)

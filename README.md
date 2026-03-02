@@ -93,8 +93,10 @@ make run-gui
 - `Shift+N`: hide/show no-reading glyphs (scope follows visible JP/CN or reading-focus)
 - `b`: toggle bookmark for current character
 - `B`: open bookmarks list, navigate, and jump
+- `x`: in bookmarks list, delete selected bookmark
 - `n`: open per-glyph multiline note editor (prefilled with glyph + codepoint)
 - `g`: open global multiline note editor
+- Variants panel marker: `▶` means jumpable, `X` means currently filtered out
 - Note editor: `Enter` inserts newline; save via UI `Save` button (GUI) or `Ctrl+S` (TUI)
 - `u`: show user workspace overlay (notes/bookmarks/recent queries)
 - `i`: open current glyph page on CCAMC

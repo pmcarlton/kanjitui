@@ -79,6 +79,15 @@ class UserStore:
         finally:
             conn.close()
 
+    def delete_bookmark(self, cp: int) -> bool:
+        conn = self._connect()
+        try:
+            with conn:
+                cur = conn.execute("DELETE FROM user_bookmarks WHERE cp = ?", (cp,))
+                return cur.rowcount > 0
+        finally:
+            conn.close()
+
     def list_bookmarks(self, limit: int = 200) -> list[tuple[int, str | None]]:
         conn = self._connect()
         try:

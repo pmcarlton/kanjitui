@@ -137,7 +137,7 @@ class BookmarkDialog(QDialog):
         self.resize(760, 460)
 
         layout = QVBoxLayout(self)
-        hint = QLabel("Enter: jump   Esc: close", self)
+        hint = QLabel("Enter: jump   x: delete   Esc: close", self)
         hint.setFont(QFont("Noto Sans Mono CJK", 12))
         layout.addWidget(hint)
 
@@ -147,8 +147,10 @@ class BookmarkDialog(QDialog):
 
         row = QHBoxLayout()
         self.jump_btn = QPushButton("Jump", self)
+        self.delete_btn = QPushButton("Delete", self)
         self.close_btn = QPushButton("Close", self)
         row.addWidget(self.jump_btn)
+        row.addWidget(self.delete_btn)
         row.addWidget(self.close_btn)
         layout.addLayout(row)
 
@@ -166,6 +168,7 @@ class BookmarkDialog(QDialog):
         self.results.itemDoubleClicked.connect(lambda _: self.accept_selected())
         self.results.itemActivated.connect(lambda _: self.accept_selected())
         self.jump_btn.clicked.connect(self.accept_selected)
+        self.delete_btn.clicked.connect(self.delete_selected)
         self.close_btn.clicked.connect(self.reject)
 
     def accept_selected(self) -> None:
@@ -177,6 +180,32 @@ class BookmarkDialog(QDialog):
             return
         self.selected_cp = int(cp)
         self.accept()
+
+    def delete_selected(self) -> None:
+        item = self.results.currentItem()
+        if item is None:
+            return
+        cp = item.data(Qt.ItemDataRole.UserRole)
+        if cp is None:
+            return
+        row = self.results.row(item)
+        if self.state.delete_bookmark(int(cp)):
+            self.results.takeItem(row)
+            if self.results.count() <= 0:
+                self.reject()
+                return
+            self.results.setCurrentRow(max(0, min(row, self.results.count() - 1)))
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
+        key = event.key()
+        text = event.text()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.accept_selected()
+            return
+        if text in ("x", "X"):
+            self.delete_selected()
+            return
+        super().keyPressEvent(event)
 
 
 class NoteEditorDialog(QDialog):
@@ -561,6 +590,9 @@ class KanjiGuiWindow(QMainWindow):
             self.state.message = "No variants to jump to"
             return False
         selected = targets[self.state.variant_idx]
+        if selected.cp not in self.state.ordered_cps:
+            self.state.message = f"Variant {selected.ch} U+{selected.cp:04X} is filtered out"
+            return False
         self.state.jump_to_cp(selected.cp)
         return True
 
@@ -622,6 +654,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Tab: cycle focus JP/CN/Variants",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
                 "Workspace: b toggle bookmark, B bookmarks list/jump",
+                "Bookmarks list: x deletes selected bookmark",
                 "Notes: n per-glyph editor, g global editor",
                 "Editor: Enter newline, Save button commits",
                 "CCAMC: i open glyph page",
@@ -777,7 +810,10 @@ class KanjiGuiWindow(QMainWindow):
         var_lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}", "Arrows: select  Enter: jump"]
         if targets:
             for idx, target in enumerate(targets[:16]):
-                marker = "▶" if idx == self.state.variant_idx else " "
+                jumpable = target.cp in self.state.ordered_cps
+                marker = " "
+                if idx == self.state.variant_idx:
+                    marker = "▶" if jumpable else "X"
                 var_lines.append(
                     f"{marker} {target.ch} U+{target.cp:04X}  {target.relation}"
                 )

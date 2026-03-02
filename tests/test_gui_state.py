@@ -62,7 +62,7 @@ def test_gui_state_ccamc_and_bookmark(tmp_path: Path) -> None:
         assert cp is not None
         state.toggle_bookmark()
         assert cp in state.bookmarked_cps
-        state.toggle_bookmark()
+        assert state.delete_bookmark(cp) is True
         assert cp not in state.bookmarked_cps
 
         state.save_glyph_note("glyph note")
