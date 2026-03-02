@@ -16,6 +16,9 @@ from kanjitui.providers.tatoeba import BuildSentencesConfig, build_sentences_tsv
 
 
 SOURCE_ORDER = ("unihan", "cedict", "kanjidic2", "jmdict", "sentences", "strokeorder")
+DOWNLOAD_TIMEOUT_SECONDS = int(os.environ.get("KANJITUI_DOWNLOAD_TIMEOUT", "45"))
+DOWNLOAD_CHUNK_BYTES = 256 * 1024
+LOG_EVERY_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -154,23 +157,52 @@ def acknowledgements_for_sources(presence: dict[str, bool]) -> list[str]:
     return lines
 
 
-def _download_to(url: str, dest: Path) -> None:
+def _download_to(url: str, dest: Path, log: Callable[[str], None] | None = None) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": "kanjitui/0.1"})
-    with urllib.request.urlopen(req) as resp, dest.open("wb") as out:
-        shutil.copyfileobj(resp, out)
+    tmp_dest = dest.with_suffix(dest.suffix + ".part")
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp, tmp_dest.open("wb") as out:
+        content_length = resp.headers.get("Content-Length")
+        total = int(content_length) if content_length and content_length.isdigit() else None
+        downloaded = 0
+        next_log = LOG_EVERY_BYTES
+        while True:
+            chunk = resp.read(DOWNLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            out.write(chunk)
+            downloaded += len(chunk)
+            if log is not None and downloaded >= next_log:
+                if total:
+                    log(f"Downloaded {downloaded // (1024 * 1024)} MiB / {total // (1024 * 1024)} MiB ...")
+                else:
+                    log(f"Downloaded {downloaded // (1024 * 1024)} MiB ...")
+                next_log += LOG_EVERY_BYTES
+    tmp_dest.replace(dest)
 
 
-def _gunzip_to(src_gz: Path, dest: Path) -> None:
+def _gunzip_to(src_gz: Path, dest: Path, log: Callable[[str], None] | None = None) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(src_gz, "rb") as gz, dest.open("wb") as out:
-        shutil.copyfileobj(gz, out)
+    tmp_dest = dest.with_suffix(dest.suffix + ".part")
+    with gzip.open(src_gz, "rb") as gz, tmp_dest.open("wb") as out:
+        written = 0
+        next_log = LOG_EVERY_BYTES
+        while True:
+            chunk = gz.read(DOWNLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            out.write(chunk)
+            written += len(chunk)
+            if log is not None and written >= next_log:
+                log(f"Decompressed {written // (1024 * 1024)} MiB ...")
+                next_log += LOG_EVERY_BYTES
+    tmp_dest.replace(dest)
 
 
 def _download_unihan(paths: RuntimePaths, log: Callable[[str], None]) -> None:
     zip_path = paths.data_dir / "Unihan.zip"
     log("Downloading Unihan.zip ...")
-    _download_to("https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip", zip_path)
+    _download_to("https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip", zip_path, log=log)
     log("Extracting Unihan*.txt ...")
     unihan_out = paths.data_dir / "unihan"
     unihan_out.mkdir(parents=True, exist_ok=True)
@@ -187,41 +219,43 @@ def _download_cedict(paths: RuntimePaths, log: Callable[[str], None]) -> None:
     _download_to(
         "https://www.mdbg.net/chinese/export/cedict/cedict_1_0_ts_utf-8_mdbg.txt.gz",
         gz_path,
+        log=log,
     )
     log("Decompressing CC-CEDICT ...")
-    _gunzip_to(gz_path, out_path)
+    _gunzip_to(gz_path, out_path, log=log)
 
 
 def _download_edrdg(paths: RuntimePaths, log: Callable[[str], None], key: str) -> None:
     if key == "kanjidic2":
         urls = [
-            "ftp://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz",
             "https://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz",
+            "ftp://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz",
         ]
         gz_path = paths.data_dir / "kanjidic2.xml.gz"
         out_path = paths.data_dir / "kanjidic2.xml"
     else:
         urls = [
-            "ftp://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz",
             "https://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz",
+            "ftp://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz",
         ]
         gz_path = paths.data_dir / "jmdict.xml.gz"
         out_path = paths.data_dir / "jmdict.xml"
 
     last_err: Exception | None = None
-    for url in urls:
+    for attempt, url in enumerate(urls, start=1):
         try:
-            log(f"Downloading {key} ({url}) ...")
-            _download_to(url, gz_path)
+            log(f"Downloading {key} (attempt {attempt}/{len(urls)}: {url}) ...")
+            _download_to(url, gz_path, log=log)
             last_err = None
             break
         except Exception as exc:  # noqa: BLE001
             last_err = exc
+            log(f"{key} download attempt failed: {exc}")
     if last_err is not None:
         raise last_err
 
     log(f"Decompressing {key} ...")
-    _gunzip_to(gz_path, out_path)
+    _gunzip_to(gz_path, out_path, log=log)
 
 
 def _download_sentences(paths: RuntimePaths, log: Callable[[str], None]) -> None:
