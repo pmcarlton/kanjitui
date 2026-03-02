@@ -11,10 +11,10 @@ from PySide6.QtGui import QFont, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QDialogButtonBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -126,6 +126,84 @@ class SearchDialog(QDialog):
             return
         self.selected_cp = int(cp)
         self.accept()
+
+
+class BookmarkDialog(QDialog):
+    def __init__(self, state: GuiState, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.state = state
+        self.selected_cp: int | None = None
+        self.setWindowTitle("Bookmarks")
+        self.resize(760, 460)
+
+        layout = QVBoxLayout(self)
+        hint = QLabel("Enter: jump   Esc: close", self)
+        hint.setFont(QFont("Noto Sans Mono CJK", 12))
+        layout.addWidget(hint)
+
+        self.results = QListWidget(self)
+        self.results.setFont(QFont("Noto Sans Mono CJK", 14))
+        layout.addWidget(self.results)
+
+        row = QHBoxLayout()
+        self.jump_btn = QPushButton("Jump", self)
+        self.close_btn = QPushButton("Close", self)
+        row.addWidget(self.jump_btn)
+        row.addWidget(self.close_btn)
+        layout.addLayout(row)
+
+        bookmarks = self.state.list_bookmarks(limit=1000)
+        for cp, tag in bookmarks:
+            label = f"{chr(cp)} U+{cp:04X}"
+            if tag:
+                label += f" [{tag}]"
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, cp)
+            self.results.addItem(item)
+        if self.results.count() > 0:
+            self.results.setCurrentRow(0)
+
+        self.results.itemDoubleClicked.connect(lambda _: self.accept_selected())
+        self.results.itemActivated.connect(lambda _: self.accept_selected())
+        self.jump_btn.clicked.connect(self.accept_selected)
+        self.close_btn.clicked.connect(self.reject)
+
+    def accept_selected(self) -> None:
+        item = self.results.currentItem()
+        if item is None:
+            return
+        cp = item.data(Qt.ItemDataRole.UserRole)
+        if cp is None:
+            return
+        self.selected_cp = int(cp)
+        self.accept()
+
+
+class NoteEditorDialog(QDialog):
+    def __init__(
+        self,
+        title: str,
+        initial_text: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(860, 520)
+        layout = QVBoxLayout(self)
+
+        self.editor = QPlainTextEdit(self)
+        self.editor.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.editor.setPlainText(initial_text)
+        layout.addWidget(self.editor)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.editor.moveCursor(self.editor.textCursor().MoveOperation.End)
 
 
 class RadicalDialog(QDialog):
@@ -489,11 +567,15 @@ class KanjiGuiWindow(QMainWindow):
     def _format_user_overlay(self, cp: int) -> list[str]:
         if self.state.user_store is None:
             return ["(user store unavailable)"]
-        notes = self.state.user_store.get_notes(cp, limit=4)
+        glyph_notes = self.state.user_store.get_glyph_notes(cp, limit=4)
+        global_notes = self.state.user_store.get_global_notes(limit=4)
         bookmarks = self.state.user_store.list_bookmarks(limit=6)
         queries = self.state.user_store.recent_queries(limit=4)
-        lines = ["Notes:"]
-        lines.extend([f"- {note}" for note in notes] or ["(none)"])
+        lines = ["Glyph notes:"]
+        lines.extend([f"- {note}" for note in glyph_notes] or ["(none)"])
+        lines.append("")
+        lines.append("Global notes:")
+        lines.extend([f"- {note}" for note in global_notes] or ["(none)"])
         lines.append("")
         lines.append("Bookmarks:")
         lines.extend([f"- {chr(bcp)} U+{bcp:04X} {f'[{tag}]' if tag else ''}" for bcp, tag in bookmarks[:3]] or ["(none)"])
@@ -539,7 +621,10 @@ class KanjiGuiWindow(QMainWindow):
                 "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
                 "Tab: cycle focus JP/CN/Variants",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
-                "Workspace: b Bookmark, n Note, i open CCAMC glyph page",
+                "Workspace: b toggle bookmark, B bookmarks list/jump",
+                "Notes: n per-glyph editor, g global editor",
+                "Editor: Enter newline, Save button commits",
+                "CCAMC: i open glyph page",
                 "Global: ? Help, q Quit",
             ],
             "show_help",
@@ -718,7 +803,7 @@ class KanjiGuiWindow(QMainWindow):
 
         self.menu_label.setText(
             "Nav:<-/->/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b n u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
         )
         self.status_label.setText(self.state.message)
 
@@ -736,10 +821,39 @@ class KanjiGuiWindow(QMainWindow):
             self.state.jump_to_cp(dlg.selected_cp)
         self.refresh_view()
 
-    def _add_note(self) -> None:
-        text, ok = QInputDialog.getText(self, "Add Note", "Note text:")
-        if ok:
-            self.state.add_note(text)
+    def _open_bookmarks(self) -> None:
+        if self.state.user_store is None:
+            self.state.message = "User workspace unavailable"
+            self.refresh_view()
+            return
+        dlg = BookmarkDialog(self.state, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_cp is not None:
+            self.state.jump_to_cp(dlg.selected_cp)
+        else:
+            self.state.message = "Closed bookmarks"
+        self.refresh_view()
+
+    def _open_note_editor(self, global_note: bool) -> None:
+        if self.state.user_store is None:
+            self.state.message = "User workspace unavailable"
+            self.refresh_view()
+            return
+        if global_note:
+            title = "Global Note"
+            initial_text = ""
+        else:
+            title = "Glyph Note"
+            initial_text = self.state.glyph_note_prefill()
+        dlg = NoteEditorDialog(title=title, initial_text=initial_text, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            self.state.message = "Cancelled note entry"
+            self.refresh_view()
+            return
+        text = dlg.editor.toPlainText()
+        if global_note:
+            self.state.save_global_note(text)
+        else:
+            self.state.save_glyph_note(text)
         self.refresh_view()
 
     def _open_ccamc(self) -> None:
@@ -818,9 +932,16 @@ class KanjiGuiWindow(QMainWindow):
         elif text == "N":
             self.state.toggle_no_reading()
         elif text in ("b", "B"):
-            self.state.toggle_bookmark()
+            if text == "b":
+                self.state.toggle_bookmark()
+            else:
+                self._open_bookmarks()
+                return
         elif text == "n":
-            self._add_note()
+            self._open_note_editor(global_note=False)
+            return
+        elif text in ("g", "G"):
+            self._open_note_editor(global_note=True)
             return
         elif text in ("i", "I"):
             self._open_ccamc()

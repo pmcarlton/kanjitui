@@ -68,7 +68,12 @@ class TuiApp:
         self.search_idx = 0
         self.note_input_open = False
         self.note_input_text = ""
+        self.note_input_cursor = 0
+        self.note_target = "glyph"
         self.show_user_overlay = False
+        self.bookmark_open = False
+        self.bookmark_rows: list[tuple[int, str | None]] = []
+        self.bookmark_idx = 0
 
         self.radical_open = False
         self.radical_counts = dict(db_query.radical_counts(conn))
@@ -88,6 +93,7 @@ class TuiApp:
         self.router.register("search", self._handle_search_key)
         self.router.register("radical", self._handle_radical_key)
         self.router.register("note", self._handle_note_key)
+        self.router.register("bookmark", self._handle_bookmark_key)
 
     @property
     def current_cp(self) -> int | None:
@@ -161,6 +167,95 @@ class TuiApp:
         if cp in self.ordered_cps:
             self.pos = self.ordered_cps.index(cp)
             self.message = f"Jumped to U+{cp:04X}"
+
+    def _open_note_editor(self, target: str) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        self.note_input_open = True
+        self.note_target = target
+        if target == "glyph":
+            cp = self.current_cp
+            if cp is None:
+                self.note_input_text = ""
+            else:
+                self.note_input_text = f"{chr(cp)} U+{cp:04X}\n"
+        else:
+            self.note_input_text = ""
+        self.note_input_cursor = len(self.note_input_text)
+        self.message = f"{'Glyph' if target == 'glyph' else 'Global'} note editor"
+
+    def _save_note_editor(self) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            self.note_input_open = False
+            return
+        text = self.note_input_text.strip()
+        if not text:
+            self.message = "Empty note ignored"
+            self.note_input_open = False
+            self.note_input_text = ""
+            self.note_input_cursor = 0
+            return
+        if self.note_target == "glyph":
+            cp = self.current_cp
+            if cp is None:
+                self.message = "No current character"
+                self.note_input_open = False
+                return
+            self.user_store.add_glyph_note(cp, text)
+            self.message = f"Saved note for U+{cp:04X}"
+        else:
+            self.user_store.add_global_note(text)
+            self.message = "Saved global note"
+        self.note_input_open = False
+        self.note_input_text = ""
+        self.note_input_cursor = 0
+
+    def _open_bookmark_picker(self) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        self.bookmark_rows = self.user_store.list_bookmarks(limit=2000)
+        if not self.bookmark_rows:
+            self.message = "No bookmarks"
+            return
+        self.bookmark_idx = 0
+        self.bookmark_open = True
+        self.message = f"Bookmarks: {len(self.bookmark_rows)}"
+
+    @staticmethod
+    def _line_starts(text: str) -> list[int]:
+        starts = [0]
+        for idx, ch in enumerate(text):
+            if ch == "\n":
+                starts.append(idx + 1)
+        return starts
+
+    def _note_cursor_line_col(self) -> tuple[int, int]:
+        starts = self._line_starts(self.note_input_text)
+        line = 0
+        for idx, start in enumerate(starts):
+            if start > self.note_input_cursor:
+                break
+            line = idx
+        col = self.note_input_cursor - starts[line]
+        return line, col
+
+    def _move_note_cursor_vertical(self, delta: int) -> None:
+        starts = self._line_starts(self.note_input_text)
+        if not starts:
+            self.note_input_cursor = 0
+            return
+        line, col = self._note_cursor_line_col()
+        target_line = max(0, min(len(starts) - 1, line + delta))
+        start = starts[target_line]
+        if target_line + 1 < len(starts):
+            # Keep cursor before newline on bounded lines.
+            line_end = starts[target_line + 1] - 1
+        else:
+            line_end = len(self.note_input_text)
+        self.note_input_cursor = min(start + col, line_end)
 
     def _visible_panel_focuses(self) -> list[str]:
         panels: list[str] = []
@@ -252,6 +347,8 @@ class TuiApp:
             return "radical"
         if self.note_input_open:
             return "note"
+        if self.bookmark_open:
+            return "bookmark"
         return "normal"
 
     def _handle_key(self, key: KeyInput) -> bool:
@@ -382,7 +479,7 @@ class TuiApp:
             scope = self._reading_filter_scope()
             self.message = f"Hide no-reading: {'on' if self.hide_no_reading else 'off'} (scope={scope})"
             return True
-        if key in (ord("b"), ord("B")):
+        if key == ord("b"):
             cp = self.current_cp
             if cp is None or self.user_store is None:
                 self.message = "User workspace unavailable"
@@ -396,12 +493,14 @@ class TuiApp:
                 f"Bookmarked U+{cp:04X}" if bookmarked else f"Removed bookmark U+{cp:04X}"
             )
             return True
+        if key == ord("B"):
+            self._open_bookmark_picker()
+            return True
         if key == ord("n"):
-            if self.user_store is None:
-                self.message = "User workspace unavailable"
-                return True
-            self.note_input_open = True
-            self.note_input_text = ""
+            self._open_note_editor(target="glyph")
+            return True
+        if key in (ord("g"), ord("G")):
+            self._open_note_editor(target="global")
             return True
         if key in (ord("u"), ord("U")):
             self.show_user_overlay = not self.show_user_overlay
@@ -587,26 +686,122 @@ class TuiApp:
         if key == 27:  # Esc
             self.note_input_open = False
             self.note_input_text = ""
+            self.note_input_cursor = 0
             self.message = "Cancelled note entry"
             return True
+        if key == 19:  # Ctrl+S
+            self._save_note_editor()
+            return True
         if key in (curses.KEY_BACKSPACE, 127, 8):
-            self.note_input_text = self.note_input_text[:-1]
+            if self.note_input_cursor > 0:
+                start = self.note_input_cursor - 1
+                self.note_input_text = (
+                    self.note_input_text[:start] + self.note_input_text[self.note_input_cursor :]
+                )
+                self.note_input_cursor = start
+            return True
+        if key == curses.KEY_DC:
+            if self.note_input_cursor < len(self.note_input_text):
+                self.note_input_text = (
+                    self.note_input_text[: self.note_input_cursor]
+                    + self.note_input_text[self.note_input_cursor + 1 :]
+                )
+            return True
+        if key == curses.KEY_LEFT:
+            self.note_input_cursor = max(0, self.note_input_cursor - 1)
+            return True
+        if key == curses.KEY_RIGHT:
+            self.note_input_cursor = min(len(self.note_input_text), self.note_input_cursor + 1)
+            return True
+        if key in (curses.KEY_UP,):
+            self._move_note_cursor_vertical(-1)
+            return True
+        if key in (curses.KEY_DOWN,):
+            self._move_note_cursor_vertical(+1)
+            return True
+        if key == curses.KEY_HOME:
+            starts = self._line_starts(self.note_input_text)
+            line, _col = self._note_cursor_line_col()
+            self.note_input_cursor = starts[line]
+            return True
+        if key == curses.KEY_END:
+            starts = self._line_starts(self.note_input_text)
+            line, _col = self._note_cursor_line_col()
+            if line + 1 < len(starts):
+                self.note_input_cursor = starts[line + 1] - 1
+            else:
+                self.note_input_cursor = len(self.note_input_text)
             return True
         if key in (10, 13, curses.KEY_ENTER):
-            cp = self.current_cp
-            if cp is not None and self.user_store is not None and self.note_input_text.strip():
-                self.user_store.add_note(cp, self.note_input_text)
-                self.message = f"Saved note for U+{cp:04X}"
-            self.note_input_open = False
-            self.note_input_text = ""
+            self.note_input_text = (
+                self.note_input_text[: self.note_input_cursor]
+                + "\n"
+                + self.note_input_text[self.note_input_cursor :]
+            )
+            self.note_input_cursor += 1
+            return True
+        if key == 9:  # Tab
+            self.note_input_text = (
+                self.note_input_text[: self.note_input_cursor]
+                + "    "
+                + self.note_input_text[self.note_input_cursor :]
+            )
+            self.note_input_cursor += 4
             return True
         if isinstance(key, str):
             if key.isprintable():
-                self.note_input_text += key
+                self.note_input_text = (
+                    self.note_input_text[: self.note_input_cursor]
+                    + key
+                    + self.note_input_text[self.note_input_cursor :]
+                )
+                self.note_input_cursor += len(key)
             return True
 
         if 32 <= key < 127:
-            self.note_input_text += chr(key)
+            ch = chr(key)
+            self.note_input_text = (
+                self.note_input_text[: self.note_input_cursor]
+                + ch
+                + self.note_input_text[self.note_input_cursor :]
+            )
+            self.note_input_cursor += 1
+            return True
+        return True
+
+    def _handle_bookmark_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
+        if key == 27:  # Esc
+            self.bookmark_open = False
+            self.bookmark_rows = []
+            self.bookmark_idx = 0
+            self.message = "Closed bookmarks"
+            return True
+        if not self.bookmark_rows:
+            self.bookmark_open = False
+            self.bookmark_idx = 0
+            self.message = "No bookmarks"
+            return True
+        if key in (curses.KEY_UP, ord("k")):
+            self.bookmark_idx = max(0, self.bookmark_idx - 1)
+            return True
+        if key in (curses.KEY_DOWN, ord("j")):
+            self.bookmark_idx = min(len(self.bookmark_rows) - 1, self.bookmark_idx + 1)
+            return True
+        if key in (curses.KEY_HOME, curses.KEY_PPAGE):
+            self.bookmark_idx = 0
+            return True
+        if key in (curses.KEY_END, curses.KEY_NPAGE):
+            self.bookmark_idx = len(self.bookmark_rows) - 1
+            return True
+        if key in (10, 13, curses.KEY_ENTER):
+            cp, _tag = self.bookmark_rows[self.bookmark_idx]
+            self._jump_to_cp(cp)
+            self.bookmark_open = False
+            self.bookmark_rows = []
+            self.bookmark_idx = 0
             return True
         return True
 
@@ -786,7 +981,7 @@ class TuiApp:
 
         menu_line = (
             "Nav:←/→/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b n u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
         )
         self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
         status = self.message
@@ -804,6 +999,8 @@ class TuiApp:
             self._render_user_overlay(stdscr, detail["cp"])
         if self.note_input_open:
             self._render_note_input_overlay(stdscr)
+        if self.bookmark_open:
+            self._render_bookmark_overlay(stdscr)
         if self.search_open:
             self._render_search_overlay(stdscr)
         if self.radical_open:
@@ -823,7 +1020,10 @@ class TuiApp:
             "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
             "Variants panel: arrows select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
-            "Workspace: b Bookmark, n Note, i open CCAMC glyph page",
+            "Workspace: b toggle bookmark, B bookmarks list/jump",
+            "Notes: n per-glyph editor, g global editor",
+            "Note editor: Enter newline, Ctrl+S save, Esc cancel",
+            "CCAMC: i open glyph page",
             "Global: ? Help, q Quit",
             "Data: Unicode Unihan, EDRDG KANJIDIC2/JMdict, CC-CEDICT",
             "License details in data/licenses/",
@@ -1021,7 +1221,7 @@ class TuiApp:
 
     def _render_user_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
-        box_h = min(16, h - 2)
+        box_h = min(20, h - 2)
         top = max(1, (h - box_h) // 2)
         left = 1
         box_w = w - 2
@@ -1030,16 +1230,26 @@ class TuiApp:
         if self.user_store is None:
             self._safe_add(stdscr, top + 2, left + 2, "(user store unavailable)")
             return
-        notes = self.user_store.get_notes(cp, limit=4)
+        glyph_notes = self.user_store.get_glyph_notes(cp, limit=4)
+        global_notes = self.user_store.get_global_notes(limit=4)
         bookmarks = self.user_store.list_bookmarks(limit=6)
         queries = self.user_store.recent_queries(limit=4)
-        self._safe_add(stdscr, top + 2, left + 2, "Notes:")
+        self._safe_add(stdscr, top + 2, left + 2, "Glyph notes:")
         y = top + 3
-        if not notes:
+        if not glyph_notes:
             self._safe_add(stdscr, y, left + 4, "(none)")
             y += 1
         else:
-            for note in notes:
+            for note in glyph_notes:
+                self._safe_add(stdscr, y, left + 4, f"- {note}")
+                y += 1
+        self._safe_add(stdscr, y, left + 2, "Global notes:")
+        y += 1
+        if not global_notes:
+            self._safe_add(stdscr, y, left + 4, "(none)")
+            y += 1
+        else:
+            for note in global_notes:
                 self._safe_add(stdscr, y, left + 4, f"- {note}")
                 y += 1
         self._safe_add(stdscr, y, left + 2, "Bookmarks:")
@@ -1056,6 +1266,8 @@ class TuiApp:
                     f"- {chr(bcp)} U+{bcp:04X} {f'[{tag}]' if tag else ''}",
                 )
                 y += 1
+                if y >= top + box_h - 3:
+                    break
         self._safe_add(stdscr, y, left + 2, "Recent queries:")
         y += 1
         if not queries:
@@ -1067,18 +1279,63 @@ class TuiApp:
 
     def _render_note_input_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
-        box_h = 5
+        box_h = min(14, h - 2)
         top = h - box_h - 1
         left = 1
         box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Note")
-        self._safe_add(stdscr, top + 1, left + 2, "Note (Enter save, Esc cancel):")
-        self._safe_add(stdscr, top + 2, left + 2, self.note_input_text)
+        title = "Glyph Note" if self.note_target == "glyph" else "Global Note"
+        self._draw_box(stdscr, top, left, box_h, box_w, title=title)
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            "Enter newline  Ctrl+S save  Esc cancel  Arrows/Home/End move",
+        )
+        inner_w = max(10, box_w - 4)
+        edit_rows = max(1, box_h - 3)
+        lines = self.note_input_text.split("\n")
+        cursor_line, cursor_col = self._note_cursor_line_col()
+        start_line = 0
+        if cursor_line >= edit_rows:
+            start_line = cursor_line - edit_rows + 1
+        for row_idx in range(edit_rows):
+            src_idx = start_line + row_idx
+            if src_idx >= len(lines):
+                break
+            self._safe_add(stdscr, top + 2 + row_idx, left + 2, lines[src_idx][:inner_w])
         try:
-            cursor_x = min(w - 2, left + 2 + len(self.note_input_text))
-            stdscr.move(top + 2, cursor_x)
+            screen_line = top + 2 + (cursor_line - start_line)
+            screen_col = left + 2 + min(cursor_col, inner_w - 1)
+            stdscr.move(screen_line, screen_col)
         except curses.error:
             pass
+
+    def _render_bookmark_overlay(self, stdscr: curses.window) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(14, h - 2)
+        top = h - box_h - 1
+        left = 1
+        box_w = w - 2
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Bookmarks")
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            "Enter jump  Esc close  Up/Down select  Home/End top/bottom",
+        )
+        if not self.bookmark_rows:
+            self._safe_add(stdscr, top + 2, left + 2, "(no bookmarks)")
+            return
+        max_rows = box_h - 3
+        start, end = visible_window(self.bookmark_idx, len(self.bookmark_rows), max_rows)
+        for offset, (cp, tag) in enumerate(self.bookmark_rows[start:end]):
+            idx = start + offset
+            marker = "▶" if idx == self.bookmark_idx else " "
+            text = f"{marker} {chr(cp)} U+{cp:04X}"
+            if tag:
+                text += f" [{tag}]"
+            row_attr = curses.A_BOLD if idx == self.bookmark_idx else 0
+            self._safe_add(stdscr, top + 2 + offset, left + 2, text, row_attr)
 
 def run_tui(
     conn: sqlite3.Connection,

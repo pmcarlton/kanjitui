@@ -254,7 +254,19 @@ class GuiState:
             self.bookmarked_cps.discard(cp)
         self.message = f"Bookmarked U+{cp:04X}" if bookmarked else f"Removed bookmark U+{cp:04X}"
 
-    def add_note(self, note: str) -> None:
+    def list_bookmarks(self, limit: int = 200) -> list[tuple[int, str | None]]:
+        if self.user_store is None:
+            return []
+        return self.user_store.list_bookmarks(limit=limit)
+
+    def glyph_note_prefill(self) -> str:
+        cp = self.current_cp
+        if cp is None:
+            return ""
+        ch = chr(cp)
+        return f"{ch} U+{cp:04X}\n"
+
+    def save_glyph_note(self, note: str) -> None:
         cp = self.current_cp
         if cp is None or self.user_store is None:
             self.message = "User workspace unavailable"
@@ -263,8 +275,19 @@ class GuiState:
         if not text:
             self.message = "Empty note ignored"
             return
-        self.user_store.add_note(cp, text)
+        self.user_store.add_glyph_note(cp, text)
         self.message = f"Saved note for U+{cp:04X}"
+
+    def save_global_note(self, note: str) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        text = note.strip()
+        if not text:
+            self.message = "Empty note ignored"
+            return
+        self.user_store.add_global_note(text)
+        self.message = "Saved global note"
 
     def current_ccamc_url(self) -> str | None:
         cp = self.current_cp

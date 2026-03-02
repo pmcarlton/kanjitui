@@ -64,6 +64,11 @@ def test_gui_state_ccamc_and_bookmark(tmp_path: Path) -> None:
         assert cp in state.bookmarked_cps
         state.toggle_bookmark()
         assert cp not in state.bookmarked_cps
+
+        state.save_glyph_note("glyph note")
+        assert any("glyph" in note for note in user_store.get_glyph_notes(cp, limit=5))
+        state.save_global_note("global note")
+        assert any("global" in note for note in user_store.get_global_notes(limit=5))
     finally:
         conn.close()
 

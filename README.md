@@ -92,7 +92,10 @@ make run-gui
 - `m`: toggle JP readings/word readings kana <-> romaji
 - `Shift+N`: hide/show no-reading glyphs (scope follows visible JP/CN or reading-focus)
 - `b`: toggle bookmark for current character
-- `n`: add a one-line note for current character
+- `B`: open bookmarks list, navigate, and jump
+- `n`: open per-glyph multiline note editor (prefilled with glyph + codepoint)
+- `g`: open global multiline note editor
+- Note editor: `Enter` inserts newline; save via UI `Save` button (GUI) or `Ctrl+S` (TUI)
 - `u`: show user workspace overlay (notes/bookmarks/recent queries)
 - `i`: open current glyph page on CCAMC
 - `?`: help/attribution overlay
@@ -140,7 +143,7 @@ make build-sentences
 ## Data Layout
 
 - `data/db.sqlite`: built SQLite database
-- `data/user.sqlite`: user metadata database (bookmarks, notes, saved queries)
+- `data/user.sqlite`: user metadata database (bookmarks, per-glyph notes, global notes, saved queries)
 - `data/font_profile.json`: optional coverage cache
 - `data/build_report.json`: build counts and exclusions
 

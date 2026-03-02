@@ -50,15 +50,33 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
 
         assert app._handle_normal_key(ord("n")) is True
         assert app.note_input_open is True
+        assert "U+" in app.note_input_text
+        assert app._handle_note_key(10) is True
         assert app._handle_note_key(ord("a")) is True
         assert app._handle_note_key("字") is True
-        assert "字" in app.note_input_text
-        assert app._handle_note_key(10) is True
+        assert "\n" in app.note_input_text
+        assert app._handle_note_key(19) is True  # Ctrl+S save
+        assert app.note_input_open is False
+
+        assert app._handle_normal_key(ord("g")) is True
+        assert app.note_input_open is True
+        assert app.note_target == "global"
+        assert app._handle_note_key(ord("G")) is True
+        assert app._handle_note_key(ord("L")) is True
+        assert app._handle_note_key(ord("B")) is True
+        assert app._handle_note_key(19) is True
         assert app.note_input_open is False
 
         assert app._handle_normal_key(ord("i")) is True
         assert opened
         assert "http://ccamc.org/cjkv.php?cjkv=" in opened[-1]
+
+        assert app._handle_normal_key(ord("B")) is True
+        assert app.bookmark_open is True
+        assert app._handle_bookmark_key(curses.KEY_DOWN) is True
+        assert app._handle_bookmark_key(curses.KEY_HOME) is True
+        assert app._handle_bookmark_key(10) is True
+        assert app.bookmark_open is False
 
         assert app._handle_normal_key(ord("/")) is True
         assert app._handle_search_key(ord("h")) is True

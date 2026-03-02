@@ -19,6 +19,12 @@ CREATE TABLE IF NOT EXISTS user_notes (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS user_global_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    note TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS saved_queries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     query TEXT NOT NULL,
@@ -26,6 +32,7 @@ CREATE TABLE IF NOT EXISTS saved_queries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_notes_cp ON user_notes(cp, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_global_notes_created ON user_global_notes(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_saved_queries_created ON saved_queries(created_at DESC);
 """
 
@@ -83,7 +90,7 @@ class UserStore:
         finally:
             conn.close()
 
-    def add_note(self, cp: int, note: str) -> None:
+    def add_glyph_note(self, cp: int, note: str) -> None:
         text = note.strip()
         if not text:
             return
@@ -94,7 +101,7 @@ class UserStore:
         finally:
             conn.close()
 
-    def get_notes(self, cp: int, limit: int = 5) -> list[str]:
+    def get_glyph_notes(self, cp: int, limit: int = 5) -> list[str]:
         conn = self._connect()
         try:
             rows = conn.execute(
@@ -104,6 +111,35 @@ class UserStore:
             return [str(row[0]) for row in rows]
         finally:
             conn.close()
+
+    def add_global_note(self, note: str) -> None:
+        text = note.strip()
+        if not text:
+            return
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("INSERT INTO user_global_notes(note) VALUES(?)", (text,))
+        finally:
+            conn.close()
+
+    def get_global_notes(self, limit: int = 5) -> list[str]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT note FROM user_global_notes ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    # Backwards-compatible aliases used by existing callers/tests.
+    def add_note(self, cp: int, note: str) -> None:
+        self.add_glyph_note(cp, note)
+
+    def get_notes(self, cp: int, limit: int = 5) -> list[str]:
+        return self.get_glyph_notes(cp, limit=limit)
 
     def save_query(self, query: str) -> None:
         text = query.strip()
