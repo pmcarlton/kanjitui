@@ -1201,7 +1201,13 @@ class KanjiGuiWindow(QMainWindow):
     def refresh_view(self) -> None:
         detail = self._current_detail()
         if detail is None:
-            self.header_label.setText("No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
+            total_chars = len(self.state.filter_data.all_cps)
+            if total_chars > 0:
+                self.header_label.setText("No characters match current filters.")
+                self.menu_label.setText("Filter:f  Quick:N  Setup:S  Ack:A  Help:?  Quit:q")
+            else:
+                self.header_label.setText("No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
+                self.menu_label.setText("Setup:S  Filter:f  Ack:A  Help:?  Quit:q")
             self.nav_strip.setText("")
             self.glyph_label.setText("?")
             self.glyph_meta.setText("")
@@ -1209,7 +1215,6 @@ class KanjiGuiWindow(QMainWindow):
             self.cn_text.setPlainText("")
             self.sent_text.setPlainText("")
             self.var_text.setPlainText("")
-            self.menu_label.setText("Setup:S  Filter:f  Ack:A  Help:?  Quit:q")
             self.status_label.setText(self.state.message)
             fake_detail = {"cp": 0}
             self._sync_overlays(fake_detail)

@@ -1402,11 +1402,16 @@ class TuiApp:
 
         cp = self.current_cp
         if cp is None:
-            self._safe_add(stdscr, 0, 0, "No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
-            menu_line = (
-                "Setup:S  Filter:f  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
-                f"{self.runtime_paths.data_dir})"
-            )
+            total_chars = len(self.filter_data.all_cps)
+            if total_chars > 0:
+                self._safe_add(stdscr, 0, 0, "No characters match current filters.")
+                menu_line = "Filter:f (c clears)  Quick filter:N  Ack:A  Help:?  Quit:q"
+            else:
+                self._safe_add(stdscr, 0, 0, "No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
+                menu_line = (
+                    "Setup:S  Filter:f  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
+                    f"{self.runtime_paths.data_dir})"
+                )
             self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
             self._safe_add(stdscr, h - 1, 0, self.message, curses.A_BOLD)
             if self.show_help:

@@ -89,3 +89,20 @@ def test_apply_filter_state_joyo_and_has_words(tmp_path: Path) -> None:
         assert all(cp in data.has_words_cps for cp in word_rows)
     finally:
         conn.close()
+
+
+def test_grade_filter_fallback_to_kanjidic2_xml_when_provenance_missing(tmp_path: Path, monkeypatch) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    fixtures = Path(__file__).parent / "fixtures"
+    conn = connect(db_path)
+    try:
+        with conn:
+            conn.execute("DELETE FROM field_provenance WHERE field IN ('jp_grade', 'jp_class')")
+        monkeypatch.setenv("KANJITUI_KANJIDIC2", str(fixtures / "kanjidic2.xml"))
+        data = load_filter_data(conn)
+        assert 0x6F22 in data.joyo_cps
+        ordered = [int(row[0]) for row in conn.execute("SELECT cp FROM chars ORDER BY cp").fetchall()]
+        joyo_only = apply_filter_state(ordered, FilterState(joyo_class="joyo"), data)
+        assert 0x6F22 in joyo_only
+    finally:
+        conn.close()

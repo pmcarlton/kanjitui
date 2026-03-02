@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
 from kanjitui.db.migrations import apply_migrations
 from kanjitui.filtering import FilterData
+from kanjitui.providers.kanjidic2 import parse_kanjidic2
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.normalizer import NormalizerPlugin, get_normalizer
 
@@ -89,6 +91,26 @@ def reading_cp_sets(conn: sqlite3.Connection) -> tuple[set[int], set[int]]:
     jp = {int(row[0]) for row in jp_rows}
     cn = {int(row[0]) for row in cn_rows}
     return (jp, cn)
+
+
+def _kanjidic2_fallback_paths() -> list[Path]:
+    candidates: list[Path] = []
+    env_kanjidic2 = os.environ.get("KANJITUI_KANJIDIC2", "").strip()
+    if env_kanjidic2:
+        candidates.append(Path(env_kanjidic2).expanduser())
+    env_data = os.environ.get("KANJITUI_DATA_DIR", "").strip()
+    if env_data:
+        candidates.append(Path(env_data).expanduser() / "kanjidic2.xml")
+    candidates.append(Path("data/raw/kanjidic2.xml"))
+    dedup: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(path)
+    return dedup
 
 
 def load_filter_data(conn: sqlite3.Connection) -> FilterData:
@@ -187,6 +209,29 @@ def load_filter_data(conn: sqlite3.Connection) -> FilterData:
             data.kyoiku_cps.add(icp)
         if grade in {9, 10}:
             data.jinmeiyo_cps.add(icp)
+
+    if not data.joyo_cps and data.source_kanjidic2_cps:
+        for path in _kanjidic2_fallback_paths():
+            if not path.exists():
+                continue
+            try:
+                parsed = parse_kanjidic2(path)
+            except Exception:
+                continue
+            for cp, record in parsed.items():
+                if cp not in data.all_cps:
+                    continue
+                grade = record.jp_grade
+                if grade is None:
+                    continue
+                if grade in {1, 2, 3, 4, 5, 6, 8}:
+                    data.joyo_cps.add(cp)
+                if grade in {1, 2, 3, 4, 5, 6}:
+                    data.kyoiku_cps.add(cp)
+                if grade in {9, 10}:
+                    data.jinmeiyo_cps.add(cp)
+            if data.joyo_cps:
+                break
     return data
 
 
