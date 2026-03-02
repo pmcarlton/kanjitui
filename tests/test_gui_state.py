@@ -126,3 +126,26 @@ def test_gui_state_filter_state_applies(tmp_path: Path) -> None:
         assert state.preview_filter_count(FilterState(reading_availability="jp_or_cn")) >= len(state.ordered_cps)
     finally:
         conn.close()
+
+
+def test_gui_state_filter_fallback_uses_final_filtered_order(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        state = GuiState(conn)
+        base = list(state.ordered_cps)
+        assert base
+
+        # Pick a glyph that has readings but no sentence rows in fixture data.
+        current = next((cp for cp in base if cp in state.cn_reading_cps and cp not in state.filter_data.sentences_cps), None)
+        assert current is not None
+        state.pos = base.index(current)
+        assert state.current_cp == current
+
+        state.hide_no_reading = True
+        state.set_filter_state(FilterState(has_sentences="yes"))
+
+        assert state.current_cp in state.ordered_cps
+        assert all(cp in state.filter_data.sentences_cps for cp in state.ordered_cps)
+    finally:
+        conn.close()

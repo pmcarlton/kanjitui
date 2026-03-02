@@ -153,11 +153,12 @@ class GuiState:
         try:
             self.pos = self.ordered_cps.index(current)
         except ValueError:
-            if allowed is not None and current in base_ordered:
+            if current in base_ordered:
                 start = base_ordered.index(current)
+                ordered_set = set(self.ordered_cps)
                 for offset in range(1, len(base_ordered) + 1):
                     candidate = base_ordered[(start + offset) % len(base_ordered)]
-                    if candidate in allowed:
+                    if candidate in ordered_set:
                         self.pos = self.ordered_cps.index(candidate)
                         return
             self.pos = 0

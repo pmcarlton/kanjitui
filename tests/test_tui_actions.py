@@ -190,6 +190,30 @@ def test_no_reading_filter_advances_to_next_glyph_when_current_filtered(tmp_path
         conn.close()
 
 
+def test_no_reading_plus_filters_keeps_valid_current_glyph(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        base = list(app.ordered_cps)
+        assert base
+
+        # Pick a glyph that has readings but no sentence rows in fixture data.
+        current = next((cp for cp in base if cp in app.cn_reading_cps and cp not in app.filter_data.sentences_cps), None)
+        assert current is not None
+        app.pos = base.index(current)
+        assert app.current_cp == current
+
+        app.hide_no_reading = True
+        app.filter_state.has_sentences = "yes"
+        app._refresh_ordering()
+
+        assert app.current_cp in app.ordered_cps
+        assert all(cp in app.filter_data.sentences_cps for cp in app.ordered_cps)
+    finally:
+        conn.close()
+
+
 def test_shift_s_opens_setup_and_s_toggles_phonetic(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)
