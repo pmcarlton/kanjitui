@@ -14,9 +14,11 @@ dependencies = []
 [project.optional-dependencies]
 build = ["fonttools>=4.0"]
 test = ["pytest>=8.0"]
+gui = ["PySide6>=6.7"]
 
 [project.scripts]
 kanjitui = "kanjitui.cli:main"
+kanjigui = "kanjitui.gui.main:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
