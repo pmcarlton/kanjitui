@@ -34,6 +34,7 @@ from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.search import normalize as search_normalize
+from kanjitui.variant_nav import VariantTarget, build_variant_targets
 from kanjitui.tui.navigation import build_strip
 from kanjitui.tui.radicals import kangxi_radical_glyph
 
@@ -155,6 +156,11 @@ class RadicalDialog(QDialog):
         self.grid.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.grid.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.grid.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.grid.horizontalHeader().setDefaultSectionSize(24)
+        self.grid.verticalHeader().setDefaultSectionSize(24)
+        self.grid.horizontalHeader().setMinimumSectionSize(20)
+        self.grid.verticalHeader().setMinimumSectionSize(20)
+        self.grid.setStyleSheet("QTableWidget::item { padding: 0px; margin: 0px; }")
         panel.addWidget(self.grid, 1)
 
         right = QVBoxLayout()
@@ -183,7 +189,7 @@ class RadicalDialog(QDialog):
         for i, radical in enumerate(self.state.radical_numbers):
             r = i // self.state.radical_grid_cols
             c = i % self.state.radical_grid_cols
-            item = QTableWidgetItem(f" {kangxi_radical_glyph(radical)} ")
+            item = QTableWidgetItem(kangxi_radical_glyph(radical))
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.grid.setItem(r, c, item)
 
@@ -278,6 +284,9 @@ class KanjiGuiWindow(QMainWindow):
         self.resize(1460, 980)
         self.setMinimumSize(1100, 760)
         self._overlays: dict[str, LiveTextDialog] = {}
+        self._variant_cache_cp: int | None = None
+        self._variant_graph: dict | None = None
+        self._variant_targets: list[VariantTarget] = []
         self._build_ui()
         self.refresh_view()
 
@@ -318,10 +327,10 @@ class KanjiGuiWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
 
-        self.jp_group, self.jp_text = self._build_panel("JP")
-        self.cn_group, self.cn_text = self._build_panel("CN")
-        self.sent_group, self.sent_text = self._build_panel("Sentences")
-        self.var_group, self.var_text = self._build_panel("Variants")
+        self.jp_group, self.jp_text = self._build_panel("JP [1]")
+        self.cn_group, self.cn_text = self._build_panel("CN [2]")
+        self.sent_group, self.sent_text = self._build_panel("Sentences [3]")
+        self.var_group, self.var_text = self._build_panel("Variants [4]")
 
         left_layout.addWidget(self.jp_group)
         left_layout.addWidget(self.cn_group)
@@ -396,19 +405,41 @@ class KanjiGuiWindow(QMainWindow):
             self._nav_shortcuts.append(shortcut)
 
     def _shortcut_move_next(self) -> None:
-        self.state.move_next()
+        if self.state.panel_focus == "variants" and self.state.show_variants:
+            moved = self._move_variant_selection(+1)
+            if not moved:
+                self.state.move_next()
+        else:
+            self.state.move_next()
         self.refresh_view()
 
     def _shortcut_move_prev(self) -> None:
-        self.state.move_prev()
+        if self.state.panel_focus == "variants" and self.state.show_variants:
+            moved = self._move_variant_selection(-1)
+            if not moved:
+                self.state.move_prev()
+        else:
+            self.state.move_prev()
         self.refresh_view()
 
     def _shortcut_move_home(self) -> None:
-        self.state.move_home()
+        if self.state.panel_focus == "variants" and self.state.show_variants:
+            cp = self.state.current_cp
+            if cp is not None:
+                _graph, targets = self._variant_data_for(cp)
+                self.state.move_variant_home(len(targets))
+        else:
+            self.state.move_home()
         self.refresh_view()
 
     def _shortcut_move_end(self) -> None:
-        self.state.move_end()
+        if self.state.panel_focus == "variants" and self.state.show_variants:
+            cp = self.state.current_cp
+            if cp is not None:
+                _graph, targets = self._variant_data_for(cp)
+                self.state.move_variant_end(len(targets))
+        else:
+            self.state.move_end()
         self.refresh_view()
 
     def _focus_style(self, active: bool) -> str:
@@ -421,6 +452,39 @@ class KanjiGuiWindow(QMainWindow):
         if cp is None:
             return None
         return db_query.get_char_detail(self.state.conn, cp)
+
+    def _variant_data_for(self, cp: int) -> tuple[dict, list[VariantTarget]]:
+        if self._variant_cache_cp != cp:
+            graph = db_query.variant_graph(self.state.conn, cp, depth=2, max_nodes=32)
+            self._variant_graph = graph
+            self._variant_targets = build_variant_targets(cp, graph)
+            self.state.variant_idx = 0
+            self._variant_cache_cp = cp
+        graph = self._variant_graph or {"nodes": [], "edges": []}
+        self.state.move_variant_selection(0, len(self._variant_targets))
+        return graph, self._variant_targets
+
+    def _move_variant_selection(self, delta: int) -> bool:
+        cp = self.state.current_cp
+        if cp is None:
+            return False
+        _graph, targets = self._variant_data_for(cp)
+        if not targets:
+            return False
+        self.state.move_variant_selection(delta, len(targets))
+        return True
+
+    def _jump_to_selected_variant(self) -> bool:
+        cp = self.state.current_cp
+        if cp is None:
+            return False
+        _graph, targets = self._variant_data_for(cp)
+        if not targets:
+            self.state.message = "No variants to jump to"
+            return False
+        selected = targets[self.state.variant_idx]
+        self.state.jump_to_cp(selected.cp)
+        return True
 
     def _format_user_overlay(self, cp: int) -> list[str]:
         if self.state.user_store is None:
@@ -466,13 +530,14 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_help,
             "Help",
             [
-                "Navigation: <-/->/j/k, Home/End, Tab reading-sort target",
+                "Navigation: <-/->/j/k, Home/End, Tab panel focus",
                 "Ordering: O cycle ordering, F cycle freq profile",
                 "JP panel: m toggles kana/romaji",
                 "Filter: Shift-N toggles hide-no-reading",
                 "Search: / open, Enter run/jump, Up/Down select",
                 "Radicals: r open browser",
-                "Panels: 1 JP, 2 CN, 3 Sentences, v Variants",
+                "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
+                "Tab: cycle focus JP/CN/Variants",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
                 "Workspace: b Bookmark, n Note, i open CCAMC glyph page",
                 "Global: ? Help, q Quit",
@@ -617,19 +682,24 @@ class KanjiGuiWindow(QMainWindow):
                 hint = "(no sentence examples; add sentences provider and rebuild DB)"
             sent_lines = [hint]
         langs_label = "/".join(lang.upper() for lang in langs)
-        self.sent_group.setTitle(f"Sentences ({langs_label})")
+        self.jp_group.setTitle("JP [1]")
+        self.cn_group.setTitle("CN [2]")
+        self.sent_group.setTitle(f"Sentences [3] ({langs_label})")
         self.sent_text.setPlainText("\n".join(sent_lines))
 
-        graph = db_query.variant_graph(self.state.conn, cp, depth=2, max_nodes=32)
-        node_map = {node_cp: node_ch for node_cp, node_ch in graph["nodes"]}
-        var_lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}"]
-        if graph["edges"]:
-            for src, kind, dst in graph["edges"][:12]:
-                src_ch = node_map.get(src, chr(src))
-                dst_ch = node_map.get(dst, chr(dst))
-                var_lines.append(f"{src_ch} U+{src:04X} -{kind}-> {dst_ch} U+{dst:04X}")
+        graph, targets = self._variant_data_for(cp)
+        self.var_group.setTitle("Variants [4]")
+        var_lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}", "Arrows: select  Enter: jump"]
+        if targets:
+            for idx, target in enumerate(targets[:16]):
+                marker = "▶" if idx == self.state.variant_idx else " "
+                var_lines.append(
+                    f"{marker} {target.ch} U+{target.cp:04X}  {target.relation}"
+                )
+            if len(targets) > 16:
+                var_lines.append(f"... +{len(targets) - 16} more")
         else:
-            var_lines.append("(no variant edges)")
+            var_lines.append("(no variant targets)")
         self.var_text.setPlainText("\n".join(var_lines))
 
         self.jp_group.setVisible(self.state.show_jp)
@@ -637,15 +707,17 @@ class KanjiGuiWindow(QMainWindow):
         self.sent_group.setVisible(self.state.show_sentences)
         self.var_group.setVisible(self.state.show_variants)
 
-        jp_focus = ORDERINGS[self.state.ordering_idx] == "reading" and self.state.focus == "jp"
-        cn_focus = ORDERINGS[self.state.ordering_idx] == "reading" and self.state.focus == "cn"
+        self.state.ensure_panel_focus_valid()
+        jp_focus = self.state.panel_focus == "jp"
+        cn_focus = self.state.panel_focus == "cn"
+        var_focus = self.state.panel_focus == "variants"
         self.jp_group.setStyleSheet(self._focus_style(jp_focus))
         self.cn_group.setStyleSheet(self._focus_style(cn_focus))
         self.sent_group.setStyleSheet(self._focus_style(False))
-        self.var_group.setStyleSheet(self._focus_style(False))
+        self.var_group.setStyleSheet(self._focus_style(var_focus))
 
         self.menu_label.setText(
-            "Nav:<-/->/j/k Home End Tab  Search:/  Radical:r  Panes:1 2 3 v  "
+            "Nav:<-/->/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
             "Overlays:c s p  User:b n u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
         )
         self.status_label.setText(self.state.message)
@@ -684,10 +756,29 @@ class KanjiGuiWindow(QMainWindow):
         key = event.key()
         text = event.text()
 
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self.state.panel_focus == "variants" and self.state.show_variants:
+                self._jump_to_selected_variant()
+                self.refresh_view()
+                event.accept()
+                return
+            super().keyPressEvent(event)
+            return
+
         if text in ("j", "J"):
-            self.state.move_next()
+            if self.state.panel_focus == "variants" and self.state.show_variants:
+                moved = self._move_variant_selection(+1)
+                if not moved:
+                    self.state.move_next()
+            else:
+                self.state.move_next()
         elif text in ("k", "K"):
-            self.state.move_prev()
+            if self.state.panel_focus == "variants" and self.state.show_variants:
+                moved = self._move_variant_selection(-1)
+                if not moved:
+                    self.state.move_prev()
+            else:
+                self.state.move_prev()
         elif key == Qt.Key.Key_Tab:
             self.state.toggle_focus()
         elif text in ("o", "O"):
@@ -698,14 +789,17 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_jp = not self.state.show_jp
             if self.state.hide_no_reading:
                 self.state.refresh_ordering()
+            self.state.ensure_panel_focus_valid()
         elif text == "2":
             self.state.show_cn = not self.state.show_cn
             if self.state.hide_no_reading:
                 self.state.refresh_ordering()
+            self.state.ensure_panel_focus_valid()
         elif text == "3":
             self.state.show_sentences = not self.state.show_sentences
-        elif text in ("v", "V"):
+        elif text in ("4", "v", "V"):
             self.state.show_variants = not self.state.show_variants
+            self.state.ensure_panel_focus_valid()
         elif text in ("p", "P"):
             self.state.show_provenance = not self.state.show_provenance
         elif text in ("c", "C"):

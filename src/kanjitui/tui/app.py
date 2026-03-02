@@ -12,6 +12,7 @@ from kanjitui.search.query import SearchEngine
 from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
 from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
 from kanjitui.tui.router import KeyInput, KeyRouter
+from kanjitui.variant_nav import VariantTarget, build_variant_targets
 
 
 ORDERINGS = ["freq", "radical", "reading", "codepoint"]
@@ -36,6 +37,7 @@ class TuiApp:
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(conn)
 
         self.focus = "jp"
+        self.panel_focus = "jp"
         self.ordering_idx = 0
         self.freq_profiles = db_query.available_frequency_profiles(conn)
         self.freq_profile_idx = 0
@@ -54,6 +56,7 @@ class TuiApp:
         self.show_phonetic = False
         self.show_jp_romaji = False
         self.hide_no_reading = False
+        self.variant_idx = 0
 
         self.message = "Ready"
         if self.derived_counts.get("field_provenance", 0) == 0:
@@ -77,6 +80,9 @@ class TuiApp:
         self.radical_selected: int | None = None
         self.radical_stroke_options: list[int | None] = [None]
         self.radical_stroke_idx = 0
+        self._variant_cache_cp: int | None = None
+        self._variant_graph: dict | None = None
+        self._variant_targets: list[VariantTarget] = []
 
         self.router = KeyRouter(self._current_mode, self._handle_normal_key)
         self.router.register("search", self._handle_search_key)
@@ -156,6 +162,80 @@ class TuiApp:
             self.pos = self.ordered_cps.index(cp)
             self.message = f"Jumped to U+{cp:04X}"
 
+    def _visible_panel_focuses(self) -> list[str]:
+        panels: list[str] = []
+        if self.show_jp:
+            panels.append("jp")
+        if self.show_cn:
+            panels.append("cn")
+        if self.show_variants:
+            panels.append("variants")
+        if not panels:
+            panels = ["jp"]
+        return panels
+
+    def _ensure_panel_focus_valid(self) -> None:
+        panels = self._visible_panel_focuses()
+        if self.panel_focus not in panels:
+            self.panel_focus = panels[0]
+        if self.panel_focus in ("jp", "cn") and self.focus != self.panel_focus:
+            self.focus = self.panel_focus
+            if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
+                self._refresh_ordering()
+
+    def _cycle_panel_focus(self) -> None:
+        panels = self._visible_panel_focuses()
+        if self.panel_focus not in panels:
+            self.panel_focus = panels[0]
+        else:
+            idx = panels.index(self.panel_focus)
+            self.panel_focus = panels[(idx + 1) % len(panels)]
+
+        if self.panel_focus in ("jp", "cn") and self.focus != self.panel_focus:
+            self.focus = self.panel_focus
+            if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
+                self._refresh_ordering()
+        self.message = f"Panel focus: {self.panel_focus}"
+
+    def _variant_data_for_current(self) -> tuple[dict, list[VariantTarget]]:
+        cp = self.current_cp
+        if cp is None:
+            self._variant_cache_cp = None
+            self._variant_graph = {"nodes": [], "edges": []}
+            self._variant_targets = []
+            self.variant_idx = 0
+            return self._variant_graph, self._variant_targets
+
+        if self._variant_cache_cp != cp:
+            graph = db_query.variant_graph(self.conn, cp, depth=2, max_nodes=32)
+            self._variant_graph = graph
+            self._variant_targets = build_variant_targets(cp, graph)
+            self.variant_idx = 0
+            self._variant_cache_cp = cp
+
+        count = len(self._variant_targets)
+        if count <= 0:
+            self.variant_idx = 0
+        else:
+            self.variant_idx = max(0, min(count - 1, self.variant_idx))
+        return self._variant_graph or {"nodes": [], "edges": []}, self._variant_targets
+
+    def _move_variant_selection(self, delta: int) -> bool:
+        _graph, targets = self._variant_data_for_current()
+        if not targets:
+            return False
+        self.variant_idx = max(0, min(len(targets) - 1, self.variant_idx + delta))
+        return True
+
+    def _jump_to_selected_variant(self) -> bool:
+        _graph, targets = self._variant_data_for_current()
+        if not targets:
+            self.message = "No variants to jump to"
+            return False
+        target = targets[self.variant_idx]
+        self._jump_to_cp(target.cp)
+        return True
+
     def run(self, stdscr: curses.window) -> None:
         stdscr.keypad(True)
         while True:
@@ -202,26 +282,43 @@ class TuiApp:
             return True
         if key in (ord("q"), ord("Q")):
             return False
+        if key in (10, 13, curses.KEY_ENTER):
+            if self.panel_focus == "variants" and self.show_variants:
+                self._jump_to_selected_variant()
+                return True
         if key in (curses.KEY_RIGHT, curses.KEY_DOWN, ord("j")):
-            if self.ordered_cps:
+            if self.panel_focus == "variants" and self.show_variants:
+                moved = self._move_variant_selection(+1)
+                if not moved and self.ordered_cps:
+                    self.pos = min(self.pos + 1, len(self.ordered_cps) - 1)
+            elif self.ordered_cps:
                 self.pos = min(self.pos + 1, len(self.ordered_cps) - 1)
             return True
         if key in (curses.KEY_LEFT, curses.KEY_UP, ord("k")):
-            if self.ordered_cps:
+            if self.panel_focus == "variants" and self.show_variants:
+                moved = self._move_variant_selection(-1)
+                if not moved and self.ordered_cps:
+                    self.pos = max(self.pos - 1, 0)
+            elif self.ordered_cps:
                 self.pos = max(self.pos - 1, 0)
             return True
         if key == curses.KEY_HOME:
-            self.pos = 0
+            if self.panel_focus == "variants" and self.show_variants:
+                _graph, targets = self._variant_data_for_current()
+                self.variant_idx = 0 if targets else 0
+            else:
+                self.pos = 0
             return True
         if key == curses.KEY_END:
-            if self.ordered_cps:
+            if self.panel_focus == "variants" and self.show_variants:
+                _graph, targets = self._variant_data_for_current()
+                self.variant_idx = len(targets) - 1 if targets else 0
+            elif self.ordered_cps:
                 self.pos = len(self.ordered_cps) - 1
             return True
 
         if key == 9:  # Tab
-            self.focus = "cn" if self.focus == "jp" else "jp"
-            if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
-                self._refresh_ordering()
+            self._cycle_panel_focus()
             return True
 
         if key in (ord("O"), ord("o")):
@@ -247,17 +344,20 @@ class TuiApp:
             self.show_jp = not self.show_jp
             if self.hide_no_reading:
                 self._refresh_ordering()
+            self._ensure_panel_focus_valid()
             return True
         if key == ord("2"):
             self.show_cn = not self.show_cn
             if self.hide_no_reading:
                 self._refresh_ordering()
+            self._ensure_panel_focus_valid()
             return True
         if key == ord("3"):
             self.show_sentences = not self.show_sentences
             return True
-        if key in (ord("v"), ord("V")):
+        if key in (ord("4"), ord("v"), ord("V")):
             self.show_variants = not self.show_variants
+            self._ensure_panel_focus_valid()
             return True
         if key in (ord("p"), ord("P")):
             self.show_provenance = not self.show_provenance
@@ -597,6 +697,7 @@ class TuiApp:
 
         self._render_nav_strip(stdscr, 2)
         y = 4
+        self._ensure_panel_focus_valid()
         if self.show_jp:
             if self.show_jp_romaji:
                 on_parts = [search_normalize.kana_to_romaji(reading) for reading in detail["jp_on"]]
@@ -620,8 +721,8 @@ class TuiApp:
                         reading = search_normalize.kana_to_romaji(kana)
                     rendered_words.append(f"  {rank}. {word}  {reading}  {gloss or '-'}")
                 lines.extend(rendered_words)
-            jp_focus = ORDERINGS[self.ordering_idx] == "reading" and self.focus == "jp"
-            y = self._render_section(stdscr, y, w, "JP", lines, highlighted=jp_focus) + 1
+            jp_focus = self.panel_focus == "jp"
+            y = self._render_section(stdscr, y, w, "JP [1]", lines, highlighted=jp_focus) + 1
 
         if self.show_cn and y < h - 5:
             if detail["cn_readings"]:
@@ -643,8 +744,8 @@ class TuiApp:
                         for trad, simp, marked, numbered, gloss, rank in words[:5]
                     ]
                 )
-            cn_focus = ORDERINGS[self.ordering_idx] == "reading" and self.focus == "cn"
-            y = self._render_section(stdscr, y, w, "CN", lines, highlighted=cn_focus) + 1
+            cn_focus = self.panel_focus == "cn"
+            y = self._render_section(stdscr, y, w, "CN [2]", lines, highlighted=cn_focus) + 1
 
         if self.show_sentences and y < h - 5:
             sentence_langs = self._sentence_langs()
@@ -667,23 +768,24 @@ class TuiApp:
                     lines.append(line)
                     lines.append(f"   source: {source or '-'} ({license_name or '-'})")
             langs_label = "/".join(lang.upper() for lang in sentence_langs)
-            y = self._render_section(stdscr, y, w, f"Sentences ({langs_label})", lines) + 1
+            y = self._render_section(stdscr, y, w, f"Sentences [3] ({langs_label})", lines) + 1
 
         if self.show_variants and y < h - 4:
-            graph = db_query.variant_graph(self.conn, detail["cp"], depth=2, max_nodes=32)
-            node_map = {node_cp: node_ch for node_cp, node_ch in graph["nodes"]}
-            lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}"]
-            if not graph["edges"]:
-                lines.append("(no variant edges)")
+            graph, targets = self._variant_data_for_current()
+            lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}", "Arrows: select  Enter: jump"]
+            if not targets:
+                lines.append("(no variant targets)")
             else:
-                for src, kind, dst in graph["edges"][:8]:
-                    src_ch = node_map.get(src, chr(src))
-                    dst_ch = node_map.get(dst, chr(dst))
-                    lines.append(f"{src_ch} U+{src:04X} -{kind}-> {dst_ch} U+{dst:04X}")
-            y = self._render_section(stdscr, y, w, "Variants", lines)
+                for idx_target, target in enumerate(targets[:10]):
+                    marker = "▶" if idx_target == self.variant_idx else " "
+                    lines.append(f"{marker} {target.ch} U+{target.cp:04X}  {target.relation}")
+                if len(targets) > 10:
+                    lines.append(f"... +{len(targets) - 10} more")
+            var_focus = self.panel_focus == "variants"
+            y = self._render_section(stdscr, y, w, "Variants [4]", lines, highlighted=var_focus)
 
         menu_line = (
-            "Nav:←/→/j/k Home End Tab  Search:/  Radical:r  Panes:1 2 3 v  "
+            "Nav:←/→/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
             "Overlays:c s p  User:b n u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
         )
         self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
@@ -712,13 +814,14 @@ class TuiApp:
     def _render_help(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
         lines = [
-            "Navigation: ←/→/j/k, Home/End, Tab reading-sort target",
+            "Navigation: ←/→/j/k, Home/End, Tab panel focus",
             "Ordering: O cycle ordering, F cycle freq profile",
             "JP panel: m toggles kana/romaji",
             "Filter: Shift-N toggles hide-no-reading (scope by language visibility/focus)",
             "Search: / open, Enter run/jump, Shift-Up/Down jump top/bottom",
             "Radicals: r open, arrows move, Enter select, [/] stroke filter",
-            "Panels: 1 JP, 2 CN, 3 Sentences, v Variants",
+            "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
+            "Variants panel: arrows select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
             "Workspace: b Bookmark, n Note, i open CCAMC glyph page",
             "Global: ? Help, q Quit",

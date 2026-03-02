@@ -45,7 +45,7 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
     try:
         app = TuiApp(conn, user_store=user_store)
 
-        for ch in ["1", "2", "3", "v", "p", "c", "s", "u", "?", "b", "O", "F", "m", "N"]:
+        for ch in ["1", "2", "3", "4", "p", "c", "s", "u", "?", "b", "O", "F", "m", "N"]:
             assert app._handle_normal_key(ord(ch)) is True
 
         assert app._handle_normal_key(ord("n")) is True
@@ -86,6 +86,30 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
 
         assert app._handle_normal_key(ord("N")) is True
         assert app.hide_no_reading is False
+
+        # Variants panel focus and Enter jump path.
+        found_variant = False
+        for idx in range(len(app.ordered_cps)):
+            app.pos = idx
+            _graph, targets = app._variant_data_for_current()
+            if targets:
+                found_variant = True
+                break
+        assert found_variant is True
+
+        app.show_jp = True
+        app.show_cn = True
+        app.show_variants = True
+        app.panel_focus = "jp"
+        assert app._handle_normal_key(9) is True  # cn
+        assert app._handle_normal_key(9) is True  # variants
+        assert app.panel_focus == "variants"
+
+        old_cp = app.current_cp
+        assert old_cp is not None
+        app.variant_idx = 0
+        assert app._handle_normal_key(10) is True
+        assert app.current_cp != old_cp
     finally:
         conn.close()
 

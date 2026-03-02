@@ -76,7 +76,7 @@ make run-gui
 - `Right`/`Down`/`j`: next character
 - `Left`/`Up`/`k`: previous character
 - `Home`/`End`: first/last in ordering
-- `Tab`: switch JP/CN focus
+- `Tab`: cycle panel focus (`JP` -> `CN` -> `Variants`)
 - `O`: cycle ordering (`freq` -> `radical` -> `reading` -> `codepoint`)
 - `F`: cycle frequency profile for `freq` ordering
 - `/`: search overlay
@@ -84,7 +84,8 @@ make run-gui
 - `1`: toggle JP pane
 - `2`: toggle CN pane
 - `3`: toggle sentence pane
-- `v`: toggle variants pane (variant graph summary)
+- `4`: toggle variants pane (variant targets/graph summary)
+- `Enter`: in focused `Variants` panel, jump to selected variant
 - `p`: toggle provenance overlay
 - `c`: toggle component overlay
 - `s`: toggle phonetic-series overlay

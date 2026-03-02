@@ -30,6 +30,7 @@ class GuiState:
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
 
         self.focus = "jp"
+        self.panel_focus = "jp"
         self.ordering_idx = 0
         self.freq_profiles = db_query.available_frequency_profiles(self.conn)
         self.freq_profile_idx = 0
@@ -45,6 +46,7 @@ class GuiState:
         self.show_user_overlay = False
         self.show_jp_romaji = False
         self.hide_no_reading = False
+        self.variant_idx = 0
 
         self.search_input = ""
         self.search_results: list[dict] = []
@@ -151,9 +153,57 @@ class GuiState:
             self.pos = len(self.ordered_cps) - 1
 
     def toggle_focus(self) -> None:
-        self.focus = "cn" if self.focus == "jp" else "jp"
-        if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
-            self.refresh_ordering()
+        panels = self.visible_panel_focuses()
+        if self.panel_focus not in panels:
+            self.panel_focus = panels[0]
+        else:
+            idx = panels.index(self.panel_focus)
+            self.panel_focus = panels[(idx + 1) % len(panels)]
+
+        if self.panel_focus in ("jp", "cn") and self.focus != self.panel_focus:
+            self.focus = self.panel_focus
+            if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
+                self.refresh_ordering()
+        self.message = f"Panel focus: {self.panel_focus}"
+
+    def visible_panel_focuses(self) -> list[str]:
+        panels: list[str] = []
+        if self.show_jp:
+            panels.append("jp")
+        if self.show_cn:
+            panels.append("cn")
+        if self.show_variants:
+            panels.append("variants")
+        if not panels:
+            panels = ["jp"]
+        return panels
+
+    def ensure_panel_focus_valid(self) -> None:
+        panels = self.visible_panel_focuses()
+        if self.panel_focus not in panels:
+            self.panel_focus = panels[0]
+        if self.panel_focus in ("jp", "cn") and self.focus != self.panel_focus:
+            self.focus = self.panel_focus
+            if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
+                self.refresh_ordering()
+
+    def move_variant_selection(self, delta: int, count: int) -> None:
+        if count <= 0:
+            self.variant_idx = 0
+            return
+        self.variant_idx = max(0, min(count - 1, self.variant_idx + delta))
+
+    def move_variant_home(self, count: int) -> None:
+        if count <= 0:
+            self.variant_idx = 0
+            return
+        self.variant_idx = 0
+
+    def move_variant_end(self, count: int) -> None:
+        if count <= 0:
+            self.variant_idx = 0
+            return
+        self.variant_idx = count - 1
 
     def cycle_ordering(self) -> None:
         self.ordering_idx = (self.ordering_idx + 1) % len(ORDERINGS)

@@ -66,3 +66,26 @@ def test_gui_state_ccamc_and_bookmark(tmp_path: Path) -> None:
         assert cp not in state.bookmarked_cps
     finally:
         conn.close()
+
+
+def test_gui_state_tab_focus_cycles_to_variants(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        state = GuiState(conn)
+        assert state.panel_focus == "jp"
+        assert state.focus == "jp"
+
+        state.toggle_focus()
+        assert state.panel_focus == "cn"
+        assert state.focus == "cn"
+
+        state.toggle_focus()
+        assert state.panel_focus == "variants"
+        assert state.focus == "cn"
+
+        state.show_variants = False
+        state.ensure_panel_focus_valid()
+        assert state.panel_focus in ("jp", "cn")
+    finally:
+        conn.close()
