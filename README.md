@@ -107,6 +107,7 @@ make run-gui
 - `c`: toggle component overlay
 - `s`: toggle phonetic-series overlay
 - `m`: toggle JP readings/word readings kana <-> romaji
+- `f`: open filter menu (grouped filters + named presets)
 - `Shift+N`: hide/show no-reading glyphs (scope follows visible JP/CN or reading-focus)
 - `b`: toggle bookmark for current character
 - `B`: open bookmarks list, navigate, and jump
@@ -116,6 +117,7 @@ make run-gui
 - `t`: open stroke-order animation popup/window (only when stroke data exists for current glyph)
 - `Shift+S`: open setup/download menu
 - `Shift+A`: open acknowledgements overlay
+- Filter menu presets: save/load/delete named presets in `data/user.sqlite`
 - Variants panel marker: `▶` means jumpable, `X` means currently filtered out
 - Note editor: `Enter` inserts newline; save via UI `Save` button (GUI) or `Ctrl+S` (TUI)
 - `u`: show user workspace overlay (notes/bookmarks/recent queries)

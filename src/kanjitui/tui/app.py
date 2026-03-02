@@ -9,6 +9,7 @@ from urllib.parse import quote
 from kanjitui.db import query as db_query
 from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
+from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
 from kanjitui.setup_resources import (
@@ -49,6 +50,8 @@ class TuiApp:
             self.bookmarked_cps = {cp for cp, _ in self.user_store.list_bookmarks(limit=1000)}
         self.derived_counts = db_query.derived_data_counts(conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(conn)
+        self.filter_state = FilterState()
+        self.filter_data = db_query.load_filter_data(conn)
 
         self.focus = "jp"
         self.panel_focus = "jp"
@@ -119,6 +122,14 @@ class TuiApp:
         self.setup_idx = 0
         self.setup_logs: list[str] = []
         self._setup_results: dict[str, str] = {}
+        self.filter_open = False
+        self.filter_options: list[tuple[str, str, str, str]] = []
+        self.filter_idx = 0
+        self.filter_presets_open = False
+        self.filter_preset_names: list[str] = []
+        self.filter_preset_idx = 0
+        self.filter_name_input_open = False
+        self.filter_name_input = ""
         if self.user_store is not None:
             self.show_startup_overlay = not self.user_store.get_flag("startup_seen", default=False)
         else:
@@ -132,6 +143,7 @@ class TuiApp:
         self.router.register("stroke", self._handle_stroke_key)
         self.router.register("setup", self._handle_setup_key)
         self.router.register("ack", self._handle_ack_key)
+        self.router.register("filter", self._handle_filter_key)
 
     @property
     def current_cp(self) -> int | None:
@@ -183,6 +195,12 @@ class TuiApp:
             else:
                 allowed = self.jp_reading_cps | self.cn_reading_cps
             ordered = [cp for cp in ordered if cp in allowed]
+        ordered = apply_filter_state(
+            ordered,
+            self.filter_state,
+            self.filter_data,
+            default_frequency_profile=self.current_freq_profile,
+        )
         self.ordered_cps = ordered
         if current is None or not self.ordered_cps:
             self.pos = 0
@@ -281,6 +299,66 @@ class TuiApp:
         self.setup_open = True
         self.message = "Setup: select sources to download"
 
+    def _refresh_filter_options(self) -> None:
+        specs = filter_group_specs(self.freq_profiles)
+        options: list[tuple[str, str, str, str]] = []
+        for group in specs:
+            for option in group.options:
+                options.append((group.key, group.label, option.value, option.label))
+        self.filter_options = options
+        if self.filter_options:
+            self.filter_idx = max(0, min(self.filter_idx, len(self.filter_options) - 1))
+        else:
+            self.filter_idx = 0
+
+    def _refresh_filter_presets(self) -> None:
+        if self.user_store is None:
+            self.filter_preset_names = []
+            self.filter_preset_idx = 0
+            return
+        self.filter_preset_names = self.user_store.list_filter_presets(limit=200)
+        if self.filter_preset_names:
+            self.filter_preset_idx = max(0, min(self.filter_preset_idx, len(self.filter_preset_names) - 1))
+        else:
+            self.filter_preset_idx = 0
+
+    def _open_filter_overlay(self) -> None:
+        self._refresh_filter_options()
+        self._refresh_filter_presets()
+        self.filter_open = True
+        self.filter_presets_open = False
+        self.filter_name_input_open = False
+        self.filter_name_input = ""
+        self.message = "Filter menu"
+
+    def _filter_payload(self) -> dict[str, object]:
+        return {
+            "filters": self.filter_state.to_payload(),
+            "hide_no_reading": self.hide_no_reading,
+        }
+
+    def _apply_filter_payload(self, payload: dict[str, object]) -> None:
+        raw = payload.get("filters")
+        if isinstance(raw, dict):
+            self.filter_state = FilterState.from_payload(raw)
+        hide = payload.get("hide_no_reading")
+        if isinstance(hide, bool):
+            self.hide_no_reading = hide
+        self._refresh_ordering()
+
+    def _apply_filter_option(self, group_key: str, value: str) -> None:
+        if not hasattr(self.filter_state, group_key):
+            return
+        setattr(self.filter_state, group_key, value)
+        self._refresh_ordering()
+        self.message = f"Filter set: {group_key}={value} ({len(self.ordered_cps)} matches)"
+
+    def _clear_filters(self) -> None:
+        self.filter_state = FilterState()
+        self.hide_no_reading = False
+        self._refresh_ordering()
+        self.message = "Cleared filters"
+
     def _run_setup_download(self) -> None:
         selected = [key for key in self.setup_rows if key in self.setup_selected]
         if not selected:
@@ -348,11 +426,17 @@ class TuiApp:
         self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
         self.derived_counts = db_query.derived_data_counts(self.conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self.filter_data = db_query.load_filter_data(self.conn)
         self.freq_profiles = db_query.available_frequency_profiles(self.conn)
         if self.freq_profiles:
             self.freq_profile_idx = max(0, min(self.freq_profile_idx, len(self.freq_profiles) - 1))
         else:
             self.freq_profile_idx = 0
+        if self.filter_state.frequency_profile != "any" and self.filter_state.frequency_profile not in self.freq_profiles:
+            self.filter_state.frequency_profile = "any"
+        if self.filter_open:
+            self._refresh_filter_options()
+            self._refresh_filter_presets()
         self._refresh_ordering()
         if current_cp is not None and current_cp in self.ordered_cps:
             self.pos = self.ordered_cps.index(current_cp)
@@ -563,6 +647,8 @@ class TuiApp:
             return "ack"
         if self.setup_open:
             return "setup"
+        if self.filter_open:
+            return "filter"
         if self.stroke_open:
             return "stroke"
         if self.search_open:
@@ -579,7 +665,7 @@ class TuiApp:
         return self.router.dispatch(key)
 
     def _set_cursor_visibility(self) -> None:
-        target = 1 if (self.search_open or self.note_input_open) else 0
+        target = 1 if (self.search_open or self.note_input_open or self.filter_name_input_open) else 0
         try:
             curses.curs_set(target)
         except curses.error:
@@ -660,6 +746,9 @@ class TuiApp:
                 self.message = f"Freq profile: {self.current_freq_profile}"
             else:
                 self.message = "No frequency profiles available"
+            return True
+        if key in (ord("f"),):
+            self._open_filter_overlay()
             return True
 
         if key == ord("1"):
@@ -840,6 +929,109 @@ class TuiApp:
                     self.setup_selected.discard(source)
                 else:
                     self.setup_selected.add(source)
+            return True
+        return True
+
+    def _handle_filter_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if self.filter_name_input_open:
+            if key == 27:
+                self.filter_name_input_open = False
+                self.filter_name_input = ""
+                self.message = "Cancelled preset save"
+                return True
+            if key in (10, 13, curses.KEY_ENTER):
+                if self.user_store is None:
+                    self.message = "User workspace unavailable"
+                else:
+                    name = self.filter_name_input.strip()
+                    if not name:
+                        self.message = "Preset name cannot be empty"
+                    else:
+                        self.user_store.save_filter_preset(name, self._filter_payload())
+                        self._refresh_filter_presets()
+                        self.message = f"Saved filter preset: {name}"
+                self.filter_name_input_open = False
+                self.filter_name_input = ""
+                return True
+            if key in (curses.KEY_BACKSPACE, 127):
+                if self.filter_name_input:
+                    self.filter_name_input = self.filter_name_input[:-1]
+                return True
+            if isinstance(key, str):
+                if len(key) == 1 and key.isprintable():
+                    self.filter_name_input += key
+                return True
+            if isinstance(key, int) and 32 <= key <= 126:
+                self.filter_name_input += chr(key)
+                return True
+            return True
+
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
+        if key in (27, ord("f"), ord("F")):
+            self.filter_open = False
+            self.filter_presets_open = False
+            self.filter_name_input_open = False
+            self.message = f"Closed filter menu ({len(self.ordered_cps)} matches)"
+            return True
+        if key in (ord("w"), ord("W")):
+            if self.user_store is None:
+                self.message = "User workspace unavailable"
+                return True
+            self.filter_name_input_open = True
+            self.filter_name_input = ""
+            self.message = "Preset name:"
+            return True
+        if key in (ord("c"),):
+            self._clear_filters()
+            return True
+        if key in (ord("p"), ord("P")):
+            self.filter_presets_open = not self.filter_presets_open
+            if self.filter_presets_open:
+                self._refresh_filter_presets()
+                self.message = "Preset list"
+            return True
+        if self.filter_presets_open:
+            if key in (curses.KEY_UP, ord("k")) and self.filter_preset_names:
+                self.filter_preset_idx = max(0, self.filter_preset_idx - 1)
+                return True
+            if key in (curses.KEY_DOWN, ord("j")) and self.filter_preset_names:
+                self.filter_preset_idx = min(len(self.filter_preset_names) - 1, self.filter_preset_idx + 1)
+                return True
+            if key in (10, 13, curses.KEY_ENTER):
+                if not self.filter_preset_names or self.user_store is None:
+                    return True
+                name = self.filter_preset_names[self.filter_preset_idx]
+                payload = self.user_store.get_filter_preset(name)
+                if payload is None:
+                    self.message = f"Preset not found: {name}"
+                else:
+                    self._apply_filter_payload(payload)
+                    self.message = f"Loaded preset: {name} ({len(self.ordered_cps)} matches)"
+                return True
+            if key in (ord("x"), ord("X")) and self.user_store is not None and self.filter_preset_names:
+                name = self.filter_preset_names[self.filter_preset_idx]
+                deleted = self.user_store.delete_filter_preset(name)
+                self._refresh_filter_presets()
+                self.message = f"Deleted preset: {name}" if deleted else f"Preset not found: {name}"
+                return True
+            return True
+
+        if key in (curses.KEY_UP, ord("k")):
+            if self.filter_options:
+                self.filter_idx = max(0, self.filter_idx - 1)
+            return True
+        if key in (curses.KEY_DOWN, ord("j")):
+            if self.filter_options:
+                self.filter_idx = min(len(self.filter_options) - 1, self.filter_idx + 1)
+            return True
+        if key in (ord(" "), 10, 13, curses.KEY_ENTER):
+            if not self.filter_options:
+                return True
+            group_key, _group_label, value, _label = self.filter_options[self.filter_idx]
+            self._apply_filter_option(group_key, value)
             return True
         return True
 
@@ -1189,7 +1381,7 @@ class TuiApp:
         if cp is None:
             self._safe_add(stdscr, 0, 0, "No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
             menu_line = (
-                "Setup:S  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
+                "Setup:S  Filter:f  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
                 f"{self.runtime_paths.data_dir})"
             )
             self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
@@ -1198,6 +1390,8 @@ class TuiApp:
                 self._render_help(stdscr)
             if self.setup_open:
                 self._render_setup_overlay(stdscr)
+            if self.filter_open:
+                self._render_filter_overlay(stdscr)
             if self.show_ack_overlay:
                 self._render_ack_overlay(stdscr, startup=False)
             if self.show_startup_overlay:
@@ -1222,7 +1416,11 @@ class TuiApp:
             bookmark_marker = " ★"
         focus_label = f"  reading-sort:{self.focus.upper()}" if ORDERINGS[self.ordering_idx] == "reading" else ""
         romaji_label = "  JP-romaji:on" if self.show_jp_romaji else ""
-        filtered_label = "  hide-no-reading:on" if self.hide_no_reading else ""
+        filtered_label = ""
+        if self.hide_no_reading:
+            filtered_label += "  hide-no-reading:on"
+        if self.filter_state.is_active():
+            filtered_label += "  filters:on"
         header = (
             f"{detail['ch']}{bookmark_marker} U+{detail['cp']:04X}  radical {detail['radical'] or '-'}  "
             f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}{romaji_label}{filtered_label}"
@@ -1324,7 +1522,7 @@ class TuiApp:
 
         menu_line = (
             "Nav:←/→/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Setup:S  Ack:A"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Ack:A"
         )
         if stroke_available:
             menu_line += "  Stroke:t"
@@ -1355,6 +1553,8 @@ class TuiApp:
             self._render_stroke_overlay(stdscr)
         if self.setup_open:
             self._render_setup_overlay(stdscr)
+        if self.filter_open:
+            self._render_filter_overlay(stdscr)
         if self.show_ack_overlay:
             self._render_ack_overlay(stdscr, startup=False)
         if self.show_startup_overlay:
@@ -1368,7 +1568,8 @@ class TuiApp:
             "Navigation: ←/→/j/k, Home/End, Tab panel focus",
             "Ordering: O cycle ordering, F cycle freq profile",
             "JP panel: m toggles kana/romaji",
-            "Filter: Shift-N toggles hide-no-reading (scope by language visibility/focus)",
+            "Filter: f opens menu, Space selects, c clear, w save preset, p preset list",
+            "Quick filter: Shift-N toggles hide-no-reading (scope by language visibility/focus)",
             "Search: / open, Enter run/jump, Shift-Up/Down jump top/bottom",
             "Radicals: r open, arrows move, Enter select, [/] stroke filter",
             "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
@@ -1694,6 +1895,70 @@ class TuiApp:
                 text += f" [{tag}]"
             row_attr = curses.A_BOLD if idx == self.bookmark_idx else 0
             self._safe_add(stdscr, top + 2 + offset, left + 2, text, row_attr)
+
+    def _render_filter_overlay(self, stdscr: curses.window) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(28, h - 2)
+        box_w = min(138, w - 2)
+        top = max(1, (h - box_h) // 2)
+        left = max(1, (w - box_w) // 2)
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Filters")
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            "Up/Down move  Space/Enter select  c clear  w save preset  p presets  Esc close",
+            curses.A_BOLD,
+        )
+
+        list_top = top + 2
+        list_h = box_h - 7
+        start, end = visible_window(self.filter_idx, len(self.filter_options), max(1, list_h))
+        prev_group = ""
+        draw_y = list_top
+        for idx in range(start, end):
+            if draw_y >= top + box_h - 5:
+                break
+            group_key, group_label, value, label = self.filter_options[idx]
+            if group_label != prev_group:
+                self._safe_add(stdscr, draw_y, left + 2, f"[{group_label}]", curses.A_BOLD)
+                draw_y += 1
+            selected = getattr(self.filter_state, group_key) == value
+            marker = "▶" if idx == self.filter_idx and not self.filter_presets_open else " "
+            check = "x" if selected else " "
+            text = f"{marker} [{check}] {label}"
+            attr = curses.A_BOLD if idx == self.filter_idx and not self.filter_presets_open else 0
+            self._safe_add(stdscr, draw_y, left + 4, text, attr)
+            draw_y += 1
+            prev_group = group_label
+
+        preset_left = left + max(60, box_w // 2)
+        self._safe_add(stdscr, top + 2, preset_left, "Presets:", curses.A_BOLD)
+        if self.user_store is None:
+            self._safe_add(stdscr, top + 3, preset_left, "(user store unavailable)")
+        elif not self.filter_preset_names:
+            self._safe_add(stdscr, top + 3, preset_left, "(none saved)")
+        else:
+            pmax = min(box_h - 8, len(self.filter_preset_names))
+            pstart, pend = visible_window(self.filter_preset_idx, len(self.filter_preset_names), pmax)
+            for offset, name in enumerate(self.filter_preset_names[pstart:pend]):
+                idx = pstart + offset
+                marker = "▶" if (self.filter_presets_open and idx == self.filter_preset_idx) else " "
+                attr = curses.A_BOLD if (self.filter_presets_open and idx == self.filter_preset_idx) else 0
+                self._safe_add(stdscr, top + 3 + offset, preset_left, f"{marker} {name}", attr)
+        self._safe_add(stdscr, top + box_h - 4, left + 2, f"Matches: {len(self.ordered_cps)}", curses.A_BOLD)
+        if self.filter_name_input_open:
+            prompt = f"Save preset name: {self.filter_name_input}"
+            self._safe_add(stdscr, top + box_h - 3, left + 2, prompt)
+            try:
+                cursor_x = min(left + box_w - 2, left + 2 + len("Save preset name: ") + len(self.filter_name_input))
+                stdscr.move(top + box_h - 3, cursor_x)
+            except curses.error:
+                pass
+        else:
+            self._safe_add(stdscr, top + box_h - 3, left + 2, self.message[: max(0, box_w - 4)])
+        mode = "preset-select" if self.filter_presets_open else "option-select"
+        self._safe_add(stdscr, top + box_h - 2, left + 2, f"Mode: {mode}  Active: {'yes' if self.filter_state.is_active() else 'no'}")
 
     def _render_setup_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()

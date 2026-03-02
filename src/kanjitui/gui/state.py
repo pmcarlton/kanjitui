@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
+from kanjitui.filtering import FilterState, apply_filter_state
 from kanjitui.search.query import SearchEngine
 from kanjitui.tui.navigation import move_grid_index
 from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
@@ -28,6 +29,8 @@ class GuiState:
 
         self.derived_counts = db_query.derived_data_counts(self.conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self.filter_state = FilterState()
+        self.filter_data = db_query.load_filter_data(self.conn)
 
         self.focus = "jp"
         self.panel_focus = "jp"
@@ -75,11 +78,14 @@ class GuiState:
         self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
         self.derived_counts = db_query.derived_data_counts(self.conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self.filter_data = db_query.load_filter_data(self.conn)
         self.freq_profiles = db_query.available_frequency_profiles(self.conn)
         if self.freq_profiles:
             self.freq_profile_idx = max(0, min(self.freq_profile_idx, len(self.freq_profiles) - 1))
         else:
             self.freq_profile_idx = 0
+        if self.filter_state.frequency_profile != "any" and self.filter_state.frequency_profile not in self.freq_profiles:
+            self.filter_state.frequency_profile = "any"
 
         self.refresh_ordering()
         if current_cp is not None and current_cp in self.ordered_cps:
@@ -122,12 +128,7 @@ class GuiState:
 
     def refresh_ordering(self) -> None:
         current = self.current_cp
-        base_ordered = db_query.get_ordered_cps(
-            self.conn,
-            ORDERINGS[self.ordering_idx],
-            self.focus,
-            self.current_freq_profile,
-        )
+        base_ordered = self.base_ordered_cps()
         ordered = base_ordered
         allowed: set[int] | None = None
         if self.hide_no_reading:
@@ -139,6 +140,12 @@ class GuiState:
             else:
                 allowed = self.jp_reading_cps | self.cn_reading_cps
             ordered = [cp for cp in ordered if cp in allowed]
+        ordered = apply_filter_state(
+            ordered,
+            self.filter_state,
+            self.filter_data,
+            default_frequency_profile=self.current_freq_profile,
+        )
         self.ordered_cps = ordered
         if current is None or not self.ordered_cps:
             self.pos = 0
@@ -154,6 +161,42 @@ class GuiState:
                         self.pos = self.ordered_cps.index(candidate)
                         return
             self.pos = 0
+
+    def base_ordered_cps(self) -> list[int]:
+        return db_query.get_ordered_cps(
+            self.conn,
+            ORDERINGS[self.ordering_idx],
+            self.focus,
+            self.current_freq_profile,
+        )
+
+    def preview_filter_count(self, state: FilterState) -> int:
+        ordered = self.base_ordered_cps()
+        if self.hide_no_reading:
+            scope = self.reading_filter_scope()
+            if scope == "jp":
+                allowed = self.jp_reading_cps
+            elif scope == "cn":
+                allowed = self.cn_reading_cps
+            else:
+                allowed = self.jp_reading_cps | self.cn_reading_cps
+            ordered = [cp for cp in ordered if cp in allowed]
+        ordered = apply_filter_state(
+            ordered,
+            state,
+            self.filter_data,
+            default_frequency_profile=self.current_freq_profile,
+        )
+        return len(ordered)
+
+    def set_filter_state(self, state: FilterState) -> None:
+        self.filter_state = state
+        self.refresh_ordering()
+
+    def clear_filters(self) -> None:
+        self.filter_state = FilterState()
+        self.hide_no_reading = False
+        self.refresh_ordering()
 
     def move_next(self) -> None:
         if self.ordered_cps:

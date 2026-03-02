@@ -34,3 +34,16 @@ def test_user_store_flags_roundtrip(tmp_path: Path) -> None:
     assert store.get_flag("startup_seen", default=False) is True
     store.set_flag("startup_seen", False)
     assert store.get_flag("startup_seen", default=True) is False
+
+
+def test_user_store_filter_presets_roundtrip(tmp_path: Path) -> None:
+    store = UserStore(tmp_path / "user.sqlite")
+    payload = {"filters": {"reading_availability": "jp"}, "hide_no_reading": True}
+    store.save_filter_preset("jp-only", payload)
+    names = store.list_filter_presets(limit=10)
+    assert "jp-only" in names
+    loaded = store.get_filter_preset("jp-only")
+    assert loaded is not None
+    assert loaded["hide_no_reading"] is True
+    assert store.delete_filter_preset("jp-only") is True
+    assert store.get_filter_preset("jp-only") is None

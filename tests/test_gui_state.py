@@ -5,6 +5,7 @@ from pathlib import Path
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db.query import connect
 from kanjitui.db.user import UserStore
+from kanjitui.filtering import FilterState
 from kanjitui.gui.state import GuiState
 
 
@@ -108,5 +109,20 @@ def test_gui_state_reload_db_state_preserves_current_cp_when_possible(tmp_path: 
         assert cp2 is not None
         state.reload_db_state(current_cp=cp2)
         assert state.current_cp == cp2
+    finally:
+        conn.close()
+
+
+def test_gui_state_filter_state_applies(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        state = GuiState(conn)
+        baseline = len(state.ordered_cps)
+        state.set_filter_state(FilterState(reading_availability="cn"))
+        assert state.ordered_cps
+        assert len(state.ordered_cps) <= baseline
+        assert all(cp in state.cn_reading_cps for cp in state.ordered_cps)
+        assert state.preview_filter_count(FilterState(reading_availability="jp_or_cn")) >= len(state.ordered_cps)
     finally:
         conn.close()

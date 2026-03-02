@@ -251,3 +251,27 @@ def test_setup_download_triggers_auto_build_and_reconnect(tmp_path: Path, monkey
         assert app.conn.execute("SELECT 1").fetchone()[0] == 1
     finally:
         app.conn.close()
+
+
+def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        baseline = len(app.ordered_cps)
+        assert app._handle_normal_key(ord("f")) is True
+        assert app.filter_open is True
+        target_idx = next(
+            idx
+            for idx, (group_key, _group_label, value, _label) in enumerate(app.filter_options)
+            if group_key == "reading_availability" and value == "jp"
+        )
+        app.filter_idx = target_idx
+        assert app._handle_filter_key(ord(" ")) is True
+        assert len(app.ordered_cps) <= baseline
+        assert app.ordered_cps
+        assert all(cp in app.jp_reading_cps for cp in app.ordered_cps)
+        assert app._handle_filter_key(27) is True
+        assert app.filter_open is False
+    finally:
+        conn.close()

@@ -14,11 +14,13 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QKeyEvent, QKeySequence,
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -38,6 +40,7 @@ from PySide6.QtWidgets import (
 from kanjitui.db import query as db_query
 from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
+from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.search import normalize as search_normalize
 from kanjitui.setup_resources import (
@@ -384,6 +387,192 @@ class SetupDialog(QDialog):
         self.progress.setValue(total_steps)
         self._append(self.window.state.message)
         self.download_btn.setEnabled(True)
+
+
+class FilterDialog(QDialog):
+    def __init__(self, window: "KanjiGuiWindow", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.window = window
+        self.state = window.state
+        self.setWindowTitle("Filters")
+        self.resize(980, 720)
+
+        layout = QVBoxLayout(self)
+        hint = QLabel("Arrow keys navigate fields. Space/Enter changes selection.", self)
+        hint.setFont(ui_font(self, 12))
+        layout.addWidget(hint)
+
+        self.hide_no_reading = QCheckBox("Hide no-reading (quick filter)", self)
+        self.hide_no_reading.setChecked(self.state.hide_no_reading)
+        layout.addWidget(self.hide_no_reading)
+
+        self.combos: dict[str, QComboBox] = {}
+        grid = QGridLayout()
+        specs = filter_group_specs(self.state.freq_profiles)
+        for row, group in enumerate(specs):
+            label = QLabel(group.label, self)
+            label.setFont(ui_font(self, 12))
+            combo = QComboBox(self)
+            combo.setFont(ui_font(self, 12))
+            for option in group.options:
+                combo.addItem(option.label, option.value)
+            current = getattr(self.state.filter_state, group.key)
+            idx = combo.findData(current)
+            combo.setCurrentIndex(max(0, idx))
+            self.combos[group.key] = combo
+            grid.addWidget(label, row, 0)
+            grid.addWidget(combo, row, 1)
+        layout.addLayout(grid)
+
+        preset_row = QHBoxLayout()
+        preset_label = QLabel("Preset", self)
+        preset_label.setFont(ui_font(self, 12))
+        self.preset_combo = QComboBox(self)
+        self.preset_combo.setFont(ui_font(self, 12))
+        self.save_btn = QPushButton("Save Preset", self)
+        self.load_btn = QPushButton("Load", self)
+        self.delete_btn = QPushButton("Delete", self)
+        preset_row.addWidget(preset_label)
+        preset_row.addWidget(self.preset_combo, 1)
+        preset_row.addWidget(self.save_btn)
+        preset_row.addWidget(self.load_btn)
+        preset_row.addWidget(self.delete_btn)
+        layout.addLayout(preset_row)
+
+        self.preview = QLabel(self)
+        self.preview.setFont(ui_font(self, 12, QFont.Weight.Bold))
+        layout.addWidget(self.preview)
+
+        buttons = QHBoxLayout()
+        self.apply_btn = QPushButton("Apply", self)
+        self.clear_btn = QPushButton("Clear All", self)
+        self.close_btn = QPushButton("Close", self)
+        buttons.addWidget(self.apply_btn)
+        buttons.addWidget(self.clear_btn)
+        buttons.addWidget(self.close_btn)
+        layout.addLayout(buttons)
+
+        for combo in self.combos.values():
+            combo.currentIndexChanged.connect(self._update_preview)
+        self.hide_no_reading.stateChanged.connect(lambda _: self._update_preview())
+        self.apply_btn.clicked.connect(self._apply)
+        self.clear_btn.clicked.connect(self._clear)
+        self.close_btn.clicked.connect(self.reject)
+        self.save_btn.clicked.connect(self._save_preset)
+        self.load_btn.clicked.connect(self._load_preset)
+        self.delete_btn.clicked.connect(self._delete_preset)
+
+        self._refresh_presets()
+        self._update_preview()
+
+    def _refresh_presets(self) -> None:
+        self.preset_combo.clear()
+        if self.state.user_store is None:
+            return
+        names = self.state.user_store.list_filter_presets(limit=200)
+        self.preset_combo.addItems(names)
+
+    def _state_from_ui(self) -> FilterState:
+        payload: dict[str, object] = {}
+        for key, combo in self.combos.items():
+            payload[key] = str(combo.currentData() or "any")
+        return FilterState.from_payload(payload)
+
+    def _preview_count(self, candidate: FilterState) -> int:
+        ordered = self.state.base_ordered_cps()
+        if self.hide_no_reading.isChecked():
+            scope = self.state.reading_filter_scope()
+            if scope == "jp":
+                allowed = self.state.jp_reading_cps
+            elif scope == "cn":
+                allowed = self.state.cn_reading_cps
+            else:
+                allowed = self.state.jp_reading_cps | self.state.cn_reading_cps
+            ordered = [cp for cp in ordered if cp in allowed]
+        ordered = apply_filter_state(
+            ordered,
+            candidate,
+            self.state.filter_data,
+            default_frequency_profile=self.state.current_freq_profile,
+        )
+        return len(ordered)
+
+    def _update_preview(self) -> None:
+        candidate = self._state_from_ui()
+        count = self._preview_count(candidate)
+        active = "yes" if candidate.is_active() or self.hide_no_reading.isChecked() else "no"
+        self.preview.setText(f"Preview matches: {count}  Active filters: {active}")
+
+    def _apply(self) -> None:
+        candidate = self._state_from_ui()
+        self.state.hide_no_reading = self.hide_no_reading.isChecked()
+        self.state.set_filter_state(candidate)
+        self.state.message = f"Applied filters ({len(self.state.ordered_cps)} matches)"
+        self.accept()
+
+    def _clear(self) -> None:
+        self.hide_no_reading.setChecked(False)
+        self.state.clear_filters()
+        for key, combo in self.combos.items():
+            idx = combo.findData("any")
+            combo.setCurrentIndex(max(0, idx))
+            setattr(self.state.filter_state, key, "any")
+        self.state.message = "Cleared filters"
+        self._update_preview()
+
+    def _save_preset(self) -> None:
+        if self.state.user_store is None:
+            self.state.message = "User workspace unavailable"
+            return
+        name, ok = QInputDialog.getText(self, "Save Filter Preset", "Preset name:")
+        if not ok:
+            return
+        text = name.strip()
+        if not text:
+            self.state.message = "Preset name cannot be empty"
+            return
+        candidate = self._state_from_ui()
+        payload = {"filters": candidate.to_payload(), "hide_no_reading": self.hide_no_reading.isChecked()}
+        self.state.user_store.save_filter_preset(text, payload)
+        self._refresh_presets()
+        idx = self.preset_combo.findText(text)
+        if idx >= 0:
+            self.preset_combo.setCurrentIndex(idx)
+        self.state.message = f"Saved preset: {text}"
+
+    def _load_preset(self) -> None:
+        if self.state.user_store is None:
+            self.state.message = "User workspace unavailable"
+            return
+        name = self.preset_combo.currentText().strip()
+        if not name:
+            return
+        payload = self.state.user_store.get_filter_preset(name)
+        if payload is None:
+            self.state.message = f"Preset not found: {name}"
+            return
+        raw = payload.get("filters")
+        if isinstance(raw, dict):
+            state = FilterState.from_payload(raw)
+            for key, combo in self.combos.items():
+                idx = combo.findData(getattr(state, key))
+                combo.setCurrentIndex(max(0, idx))
+        hide = payload.get("hide_no_reading")
+        if isinstance(hide, bool):
+            self.hide_no_reading.setChecked(hide)
+        self._update_preview()
+        self.state.message = f"Loaded preset: {name}"
+
+    def _delete_preset(self) -> None:
+        if self.state.user_store is None:
+            self.state.message = "User workspace unavailable"
+            return
+        name = self.preset_combo.currentText().strip()
+        if not name:
+            return
+        deleted = self.state.user_store.delete_filter_preset(name)
+        self._refresh_presets()
+        self.state.message = f"Deleted preset: {name}" if deleted else f"Preset not found: {name}"
 
 
 class RadicalDialog(QDialog):
@@ -919,7 +1108,8 @@ class KanjiGuiWindow(QMainWindow):
                 "Navigation: <-/->/j/k, Home/End, Tab panel focus",
                 "Ordering: O cycle ordering, F cycle freq profile",
                 "JP panel: m toggles kana/romaji",
-                "Filter: Shift-N toggles hide-no-reading",
+                "Filter: f opens menu; presets can be saved/loaded/deleted",
+                "Quick filter: Shift-N toggles hide-no-reading",
                 "Search: / open, Enter run/jump, Up/Down select",
                 "Radicals: r open browser",
                 "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
@@ -1019,7 +1209,7 @@ class KanjiGuiWindow(QMainWindow):
             self.cn_text.setPlainText("")
             self.sent_text.setPlainText("")
             self.var_text.setPlainText("")
-            self.menu_label.setText("Setup:S  Ack:A  Help:?  Quit:q")
+            self.menu_label.setText("Setup:S  Filter:f  Ack:A  Help:?  Quit:q")
             self.status_label.setText(self.state.message)
             fake_detail = {"cp": 0}
             self._sync_overlays(fake_detail)
@@ -1034,7 +1224,11 @@ class KanjiGuiWindow(QMainWindow):
         bookmark_marker = " *" if cp in self.state.bookmarked_cps else ""
         focus_label = f"  reading-sort:{self.state.focus.upper()}" if ORDERINGS[self.state.ordering_idx] == "reading" else ""
         romaji_label = "  JP-romaji:on" if self.state.show_jp_romaji else ""
-        filtered_label = "  hide-no-reading:on" if self.state.hide_no_reading else ""
+        filtered_label = ""
+        if self.state.hide_no_reading:
+            filtered_label += "  hide-no-reading:on"
+        if self.state.filter_state.is_active():
+            filtered_label += "  filters:on"
         self.header_label.setText(
             f"{detail['ch']}{bookmark_marker} U+{cp:04X}  radical {detail['radical'] or '-'}  "
             f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}{romaji_label}{filtered_label}"
@@ -1148,7 +1342,7 @@ class KanjiGuiWindow(QMainWindow):
         stroke_available = self.stroke_repo.has_char(detail["ch"])
         menu_line = (
             "Nav:<-/->/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Setup:S  Ack:A"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Ack:A"
         )
         if stroke_available:
             menu_line += "  Stroke:t"
@@ -1281,6 +1475,14 @@ class KanjiGuiWindow(QMainWindow):
         dlg.exec()
         self.refresh_view()
 
+    def _open_filter_dialog(self) -> None:
+        dlg = FilterDialog(self, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_view()
+        else:
+            self.state.message = "Closed filter menu"
+            self.refresh_view()
+
     def _stroke_available_for_current(self) -> bool:
         cp = self.state.current_cp
         if cp is None:
@@ -1348,6 +1550,9 @@ class KanjiGuiWindow(QMainWindow):
             self.state.toggle_focus()
         elif text in ("o", "O"):
             self.state.cycle_ordering()
+        elif text == "f":
+            self._open_filter_dialog()
+            return
         elif text == "F":
             self.state.cycle_freq_profile()
         elif text == "1":

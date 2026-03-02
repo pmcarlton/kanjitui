@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import sqlite3
 
@@ -37,9 +38,16 @@ CREATE TABLE IF NOT EXISTS user_flags (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS user_filter_presets (
+    name TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_user_notes_cp ON user_notes(cp, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_global_notes_created ON user_global_notes(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_saved_queries_created ON saved_queries(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_filter_presets_updated ON user_filter_presets(updated_at DESC);
 """
 
 
@@ -203,5 +211,66 @@ class UserStore:
                     """,
                     (key, "1" if value else "0"),
                 )
+        finally:
+            conn.close()
+
+    def save_filter_preset(self, name: str, payload: dict[str, object]) -> None:
+        preset = name.strip()
+        if not preset:
+            return
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO user_filter_presets(name, payload, updated_at)
+                    VALUES(?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(name) DO UPDATE SET
+                        payload=excluded.payload,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (preset, encoded),
+                )
+        finally:
+            conn.close()
+
+    def list_filter_presets(self, limit: int = 200) -> list[str]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT name FROM user_filter_presets ORDER BY updated_at DESC, name LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def get_filter_preset(self, name: str) -> dict[str, object] | None:
+        preset = name.strip()
+        if not preset:
+            return None
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT payload FROM user_filter_presets WHERE name = ?",
+                (preset,),
+            ).fetchone()
+            if row is None:
+                return None
+            payload = str(row[0])
+            return json.loads(payload)
+        finally:
+            conn.close()
+
+    def delete_filter_preset(self, name: str) -> bool:
+        preset = name.strip()
+        if not preset:
+            return False
+        conn = self._connect()
+        try:
+            with conn:
+                cur = conn.execute("DELETE FROM user_filter_presets WHERE name = ?", (preset,))
+                return cur.rowcount > 0
         finally:
             conn.close()

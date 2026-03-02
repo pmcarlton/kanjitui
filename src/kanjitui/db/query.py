@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from kanjitui.db.migrations import apply_migrations
+from kanjitui.filtering import FilterData
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.normalizer import NormalizerPlugin, get_normalizer
 
@@ -88,6 +89,70 @@ def reading_cp_sets(conn: sqlite3.Connection) -> tuple[set[int], set[int]]:
     jp = {int(row[0]) for row in jp_rows}
     cn = {int(row[0]) for row in cn_rows}
     return (jp, cn)
+
+
+def load_filter_data(conn: sqlite3.Connection) -> FilterData:
+    data = FilterData()
+    rows = conn.execute("SELECT cp, strokes, sources FROM chars").fetchall()
+    for row in rows:
+        cp = int(row[0])
+        data.all_cps.add(cp)
+        data.strokes_by_cp[cp] = int(row[1]) if row[1] is not None else None
+        source_text = str(row[2] or "")
+        source_set = {part.strip() for part in source_text.split(",") if part.strip()}
+        if "unihan" in source_set:
+            data.source_unihan_cps.add(cp)
+        if "kanjidic2" in source_set:
+            data.source_kanjidic2_cps.add(cp)
+        if "cedict" in source_set:
+            data.source_cedict_cps.add(cp)
+
+    jp_rows = conn.execute("SELECT cp, type FROM jp_readings").fetchall()
+    for row in jp_rows:
+        cp = int(row[0])
+        data.jp_cps.add(cp)
+        typ = str(row[1] or "")
+        if typ == "on":
+            data.jp_on_cps.add(cp)
+        elif typ == "kun":
+            data.jp_kun_cps.add(cp)
+
+    cn_rows = conn.execute(
+        "SELECT cp, COUNT(DISTINCT pinyin_numbered) FROM cn_readings GROUP BY cp"
+    ).fetchall()
+    for cp, cnt in cn_rows:
+        icp = int(cp)
+        data.cn_cps.add(icp)
+        if int(cnt) > 1:
+            data.cn_multi_cps.add(icp)
+
+    var_rows = conn.execute("SELECT cp, kind FROM variants").fetchall()
+    for row in var_rows:
+        cp = int(row[0])
+        kind = str(row[1] or "")
+        data.any_variant_cps.add(cp)
+        if kind == "simplified":
+            data.variant_simplified_cps.add(cp)
+        if kind == "traditional":
+            data.variant_traditional_cps.add(cp)
+        if kind in {"semantic", "specialized"}:
+            data.variant_semantic_cps.add(cp)
+        if kind == "compat":
+            data.variant_compat_cps.add(cp)
+
+    data.components_cps = {int(row[0]) for row in conn.execute("SELECT DISTINCT cp FROM components").fetchall()}
+    data.phonetic_cps = {int(row[0]) for row in conn.execute("SELECT DISTINCT cp FROM phonetic_series").fetchall()}
+    data.provenance_cps = {
+        int(row[0]) for row in conn.execute("SELECT DISTINCT cp FROM field_provenance").fetchall()
+    }
+    data.sentences_cps = {int(row[0]) for row in conn.execute("SELECT DISTINCT cp FROM sentences").fetchall()}
+
+    freq_rows = conn.execute("SELECT profile, cp, rank FROM frequency_scores").fetchall()
+    for profile, cp, rank in freq_rows:
+        p = str(profile)
+        ranks = data.frequency_ranks.setdefault(p, {})
+        ranks[int(cp)] = int(rank)
+    return data
 
 
 def stroke_options_by_radical(conn: sqlite3.Connection, radical: int) -> list[int]:
