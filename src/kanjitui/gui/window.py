@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import html
 import math
 import sqlite3
 import webbrowser
 from typing import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QKeyEvent
+from PySide6.QtGui import QFont, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -300,14 +301,18 @@ class KanjiGuiWindow(QMainWindow):
 
         self.header_label = QLabel(self)
         self.header_label.setFont(QFont("Noto Sans Mono CJK", 16, QFont.Weight.Bold))
+        self.header_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.header_label, 0, 0)
 
         self.nav_strip = QLabel(self)
         self.nav_strip.setFont(QFont("Noto Sans Mono CJK", 18))
+        self.nav_strip.setTextFormat(Qt.TextFormat.RichText)
+        self.nav_strip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.nav_strip, 1, 0)
 
         left_scroll = QScrollArea(self)
         left_scroll.setWidgetResizable(True)
+        left_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         left_inner = QWidget(left_scroll)
         left_layout = QVBoxLayout(left_inner)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -335,26 +340,76 @@ class KanjiGuiWindow(QMainWindow):
         self.glyph_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self.glyph_label.setFont(QFont("Noto Sans CJK JP", 56))
         self.glyph_label.setMinimumWidth(280)
+        self.glyph_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         right_layout.addWidget(self.glyph_label)
 
         self.glyph_meta = QLabel(self)
         self.glyph_meta.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self.glyph_meta.setFont(QFont("Noto Sans Mono CJK", 16))
+        self.glyph_meta.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         right_layout.addWidget(self.glyph_meta)
         right_layout.addStretch(1)
         grid.addWidget(right, 0, 1, 3, 1)
 
         self.menu_label = QLabel(self)
         self.menu_label.setFont(QFont("Noto Sans Mono CJK", 13, QFont.Weight.Bold))
+        self.menu_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.menu_label, 3, 0, 1, 2)
 
         self.status_label = QLabel(self)
         self.status_label.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.status_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.status_label, 4, 0, 1, 2)
 
         grid.setColumnStretch(0, 4)
         grid.setColumnStretch(1, 1)
         grid.setRowStretch(2, 1)
+
+        for widget in (
+            self.jp_text,
+            self.cn_text,
+            self.sent_text,
+            self.var_text,
+            left_inner,
+            right,
+            root,
+        ):
+            widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._setup_navigation_shortcuts()
+        self.setFocus()
+
+    def _setup_navigation_shortcuts(self) -> None:
+        self._nav_shortcuts: list[QShortcut] = []
+        bindings = [
+            (Qt.Key.Key_Right, self._shortcut_move_next),
+            (Qt.Key.Key_Down, self._shortcut_move_next),
+            (Qt.Key.Key_Left, self._shortcut_move_prev),
+            (Qt.Key.Key_Up, self._shortcut_move_prev),
+            (Qt.Key.Key_Home, self._shortcut_move_home),
+            (Qt.Key.Key_End, self._shortcut_move_end),
+        ]
+        for key, handler in bindings:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(handler)
+            self._nav_shortcuts.append(shortcut)
+
+    def _shortcut_move_next(self) -> None:
+        self.state.move_next()
+        self.refresh_view()
+
+    def _shortcut_move_prev(self) -> None:
+        self.state.move_prev()
+        self.refresh_view()
+
+    def _shortcut_move_home(self) -> None:
+        self.state.move_home()
+        self.refresh_view()
+
+    def _shortcut_move_end(self) -> None:
+        self.state.move_end()
+        self.refresh_view()
 
     def _focus_style(self, active: bool) -> str:
         if active:
@@ -498,10 +553,14 @@ class KanjiGuiWindow(QMainWindow):
         nav = []
         for cell in strip:
             if cell.cp is None:
-                nav.append("·")
+                nav.append('<span style="color:#777">·</span>')
             else:
                 ch = chr(cell.cp)
-                nav.append(f"[{ch}]" if cell.is_current else ch)
+                safe_ch = html.escape(ch)
+                if cell.is_current:
+                    nav.append(f'<span style="color:#00a0ff;font-weight:700">{safe_ch}</span>')
+                else:
+                    nav.append(safe_ch)
         self.nav_strip.setText(" ".join(nav))
 
         self.glyph_label.setText(detail["ch"])
@@ -625,14 +684,10 @@ class KanjiGuiWindow(QMainWindow):
         key = event.key()
         text = event.text()
 
-        if key in (Qt.Key.Key_Right, Qt.Key.Key_Down) or text in ("j", "J"):
+        if text in ("j", "J"):
             self.state.move_next()
-        elif key in (Qt.Key.Key_Left, Qt.Key.Key_Up) or text in ("k", "K"):
+        elif text in ("k", "K"):
             self.state.move_prev()
-        elif key == Qt.Key.Key_Home:
-            self.state.move_home()
-        elif key == Qt.Key.Key_End:
-            self.state.move_end()
         elif key == Qt.Key.Key_Tab:
             self.state.toggle_focus()
         elif text in ("o", "O"):
