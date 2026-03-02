@@ -19,6 +19,7 @@ SOURCE_ORDER = ("unihan", "cedict", "kanjidic2", "jmdict", "sentences", "strokeo
 DOWNLOAD_TIMEOUT_SECONDS = int(os.environ.get("KANJITUI_DOWNLOAD_TIMEOUT", "45"))
 DOWNLOAD_CHUNK_BYTES = 256 * 1024
 LOG_EVERY_BYTES = 8 * 1024 * 1024
+ALLOW_FTP_FALLBACK = os.environ.get("KANJITUI_ALLOW_FTP", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -229,15 +230,17 @@ def _download_edrdg(paths: RuntimePaths, log: Callable[[str], None], key: str) -
     if key == "kanjidic2":
         urls = [
             "https://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz",
-            "ftp://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz",
         ]
+        if ALLOW_FTP_FALLBACK:
+            urls.append("ftp://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz")
         gz_path = paths.data_dir / "kanjidic2.xml.gz"
         out_path = paths.data_dir / "kanjidic2.xml"
     else:
         urls = [
             "https://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz",
-            "ftp://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz",
         ]
+        if ALLOW_FTP_FALLBACK:
+            urls.append("ftp://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz")
         gz_path = paths.data_dir / "jmdict.xml.gz"
         out_path = paths.data_dir / "jmdict.xml"
 
