@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import math
+from pathlib import Path
 import sqlite3
 import webbrowser
 from typing import Callable
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from kanjitui.db import query as db_query
+from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.search import normalize as search_normalize
@@ -42,6 +44,7 @@ from kanjitui.setup_resources import (
     default_setup_selection,
     detect_available_sources,
     download_selected_sources,
+    rebuild_database_from_sources,
     resolve_runtime_paths,
 )
 from kanjitui.strokeorder import StrokeOrderData, StrokeOrderRepository
@@ -325,7 +328,9 @@ class SetupDialog(QDialog):
         ok = sum(1 for status in results.values() if status == "ok")
         fail = sum(1 for status in results.values() if status != "ok")
         self._append(f"Completed: ok={ok} failed={fail}")
+        self._append("Starting automatic DB rebuild ...")
         self.window._after_setup_download(results)
+        self._append(self.window.state.message)
         self.download_btn.setEnabled(True)
 
 
@@ -1174,8 +1179,42 @@ class KanjiGuiWindow(QMainWindow):
         ok = sum(1 for status in results.values() if status == "ok")
         fail = sum(1 for status in results.values() if status != "ok")
         self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
-        self.state.message = f"Setup download completed: ok={ok} failed={fail}"
+        db_path = self._current_db_path()
+        if db_path is None:
+            self.state.message = "Setup download completed, but auto-build skipped (no DB path)."
+            self.refresh_view()
+            return
+
+        current_cp = self.state.current_cp
+        auto_build_ok = False
+        try:
+            try:
+                self.state.conn.close()
+            except Exception:
+                pass
+            _ = rebuild_database_from_sources(
+                paths=self.runtime_paths,
+                db_path=db_path,
+                progress=lambda msg: None,
+            )
+            auto_build_ok = True
+        except Exception as exc:  # noqa: BLE001
+            self.state.message = f"Setup download completed, auto-build failed: {exc}"
+        finally:
+            self.state.conn = connect_db(db_path)
+            self.state.reload_db_state(current_cp=current_cp)
+        if auto_build_ok:
+            self.state.message = f"Setup download + auto-build completed: ok={ok} failed={fail}"
         self.refresh_view()
+
+    def _current_db_path(self) -> Path | None:
+        row = self.state.conn.execute("PRAGMA database_list").fetchone()
+        if row is None:
+            return None
+        raw = str(row[2] or "").strip()
+        if not raw:
+            return None
+        return Path(raw)
 
     def _open_setup_dialog(self) -> None:
         self._dismiss_startup_overlay()

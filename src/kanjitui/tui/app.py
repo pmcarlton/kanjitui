@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import curses
+from pathlib import Path
 import sqlite3
 import webbrowser
 from urllib.parse import quote
 
 from kanjitui.db import query as db_query
+from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
@@ -16,6 +18,7 @@ from kanjitui.setup_resources import (
     default_setup_selection,
     detect_available_sources,
     download_selected_sources,
+    rebuild_database_from_sources,
     resolve_runtime_paths,
 )
 from kanjitui.strokeorder import StrokeOrderData, StrokeOrderRepository, build_tui_stroke_frames
@@ -38,6 +41,7 @@ class TuiApp:
         user_store: UserStore | None = None,
     ) -> None:
         self.conn = conn
+        self.normalizer_name = normalizer_name
         self.search_engine = SearchEngine(conn, normalizer_name=normalizer_name)
         self.user_store = user_store
         self.bookmarked_cps: set[int] = set()
@@ -296,8 +300,62 @@ class TuiApp:
         ok = sum(1 for status in self._setup_results.values() if status == "ok")
         fail = sum(1 for status in self._setup_results.values() if status != "ok")
         self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
+        auto_build_ok = False
+        db_path = self._current_db_path()
+        if db_path is None:
+            self.setup_logs.append("Skipping auto-build: no filesystem DB path is attached.")
+        else:
+            current_cp = self.current_cp
+            self.setup_logs.append("Starting automatic DB rebuild ...")
+            try:
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+                _ = rebuild_database_from_sources(
+                    paths=self.runtime_paths,
+                    db_path=db_path,
+                    progress=_progress,
+                )
+                auto_build_ok = True
+            except Exception as exc:  # noqa: BLE001
+                self.setup_logs.append(f"Automatic DB rebuild failed: {exc}")
+            finally:
+                self.conn = connect_db(db_path)
+                self._reload_db_state(current_cp=current_cp)
         self.setup_logs.append(f"Completed: ok={ok} failed={fail}")
-        self.message = f"Setup download completed: ok={ok} failed={fail}"
+        if auto_build_ok:
+            self.message = f"Setup download + auto-build completed: ok={ok} failed={fail}"
+        else:
+            self.message = f"Setup download completed: ok={ok} failed={fail}"
+
+    def _current_db_path(self) -> Path | None:
+        row = self.conn.execute("PRAGMA database_list").fetchone()
+        if row is None:
+            return None
+        raw = str(row[2] or "").strip()
+        if not raw:
+            return None
+        return Path(raw)
+
+    def _reload_db_state(self, current_cp: int | None = None) -> None:
+        self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
+        self.derived_counts = db_query.derived_data_counts(self.conn)
+        self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self.freq_profiles = db_query.available_frequency_profiles(self.conn)
+        if self.freq_profiles:
+            self.freq_profile_idx = max(0, min(self.freq_profile_idx, len(self.freq_profiles) - 1))
+        else:
+            self.freq_profile_idx = 0
+        self._refresh_ordering()
+        if current_cp is not None and current_cp in self.ordered_cps:
+            self.pos = self.ordered_cps.index(current_cp)
+        elif self.ordered_cps:
+            self.pos = max(0, min(self.pos, len(self.ordered_cps) - 1))
+        else:
+            self.pos = 0
+        if self.derived_counts.get("field_provenance", 0) == 0 and not self.message.startswith("Setup"):
+            self.message = "DB missing derived rows (run --build to populate phase C/D features)"
 
     def _current_stroke_char(self) -> str | None:
         cp = self.current_cp

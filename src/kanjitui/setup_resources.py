@@ -11,11 +11,13 @@ from typing import Callable
 import urllib.request
 import zipfile
 
+from kanjitui.db.build import BuildConfig, build_database, default_build_paths
 from kanjitui.db.user import UserStore
 from kanjitui.providers.tatoeba import BuildSentencesConfig, build_sentences_tsv, download_if_missing
 
 
 SOURCE_ORDER = ("unihan", "cedict", "kanjidic2", "jmdict", "sentences", "strokeorder")
+BUILD_PROVIDER_ORDER = ("unihan", "kanjidic2", "jmdict", "cedict", "sentences")
 DOWNLOAD_TIMEOUT_SECONDS = int(os.environ.get("KANJITUI_DOWNLOAD_TIMEOUT", "45"))
 DOWNLOAD_CHUNK_BYTES = 256 * 1024
 LOG_EVERY_BYTES = 8 * 1024 * 1024
@@ -127,6 +129,10 @@ def detect_available_sources(paths: RuntimePaths) -> dict[str, bool]:
 def default_setup_selection(presence: dict[str, bool]) -> list[str]:
     out = [key for key in SOURCE_ORDER if not presence.get(key, False)]
     return out
+
+
+def build_enabled_providers(presence: dict[str, bool]) -> tuple[str, ...]:
+    return tuple(key for key in BUILD_PROVIDER_ORDER if presence.get(key, False))
 
 
 def acknowledgements_for_sources(presence: dict[str, bool]) -> list[str]:
@@ -367,3 +373,32 @@ def download_selected_sources(
             results[key] = f"error: {exc}"
             log(f"{key} failed: {exc}")
     return results
+
+
+def rebuild_database_from_sources(
+    paths: RuntimePaths,
+    db_path: Path,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, int]:
+    presence = detect_available_sources(paths)
+    providers = build_enabled_providers(presence)
+    if not providers:
+        raise FileNotFoundError("No buildable data sources found. Download at least one dictionary source.")
+
+    if progress is not None:
+        progress(f"Rebuilding DB with providers: {','.join(providers)} ...")
+    counts = build_database(
+        BuildConfig(
+            db_path=db_path,
+            paths=default_build_paths(paths.data_dir),
+            font=None,
+            enabled_providers=providers,
+        )
+    )
+    if progress is not None:
+        progress(
+            "DB build complete: "
+            f"included={counts.get('included', 0)} "
+            f"excluded_font={counts.get('excluded_font', 0)}"
+        )
+    return counts

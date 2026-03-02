@@ -4,6 +4,7 @@ from pathlib import Path
 
 from kanjitui.setup_resources import (
     acknowledgements_for_sources,
+    build_enabled_providers,
     default_setup_selection,
     detect_available_sources,
     RuntimePaths,
@@ -58,3 +59,17 @@ def test_all_sources_have_license_links() -> None:
     for spec in SOURCES.values():
         assert spec.license_url.startswith("http")
         assert spec.license_label.strip()
+
+
+def test_build_enabled_providers_order_and_filter() -> None:
+    providers = build_enabled_providers(
+        {
+            "unihan": True,
+            "cedict": True,
+            "kanjidic2": False,
+            "jmdict": True,
+            "sentences": True,
+            "strokeorder": True,
+        }
+    )
+    assert providers == ("unihan", "jmdict", "cedict", "sentences")

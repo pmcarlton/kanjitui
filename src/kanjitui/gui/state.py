@@ -71,6 +71,24 @@ class GuiState:
         )
         self.pos = 0
 
+    def reload_db_state(self, current_cp: int | None = None) -> None:
+        self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
+        self.derived_counts = db_query.derived_data_counts(self.conn)
+        self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self.freq_profiles = db_query.available_frequency_profiles(self.conn)
+        if self.freq_profiles:
+            self.freq_profile_idx = max(0, min(self.freq_profile_idx, len(self.freq_profiles) - 1))
+        else:
+            self.freq_profile_idx = 0
+
+        self.refresh_ordering()
+        if current_cp is not None and current_cp in self.ordered_cps:
+            self.pos = self.ordered_cps.index(current_cp)
+        elif self.ordered_cps:
+            self.pos = max(0, min(self.pos, len(self.ordered_cps) - 1))
+        else:
+            self.pos = 0
+
     @property
     def current_cp(self) -> int | None:
         if not self.ordered_cps:

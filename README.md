@@ -32,6 +32,7 @@ Lean-package flow (TUI and GUI):
 - On first startup, an acknowledgements page is shown.
 - Press `Shift+S` to open Setup and select/download sources from inside the app.
 - Setup view shows a per-source license/terms link on the right.
+- After setup downloads complete, the app automatically rebuilds `--db` from available sources.
 - Press `Shift+A` to reopen acknowledgements any time.
 
 ## Build Database

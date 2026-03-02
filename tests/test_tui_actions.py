@@ -221,3 +221,33 @@ def test_startup_overlay_dismissed_on_non_ascii_input(tmp_path: Path) -> None:
         assert app.show_startup_overlay is False
     finally:
         conn.close()
+
+
+def test_setup_download_triggers_auto_build_and_reconnect(tmp_path: Path, monkeypatch) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    app = TuiApp(conn)
+    app.setup_selected = {"unihan"}
+    calls: dict[str, object] = {}
+
+    def fake_download_selected_sources(selected, paths, progress):
+        calls["selected"] = tuple(selected)
+        progress("download ok")
+        return {"unihan": "ok"}
+
+    def fake_rebuild_database_from_sources(paths, db_path, progress):
+        calls["db_path"] = db_path
+        progress("build ok")
+        return {"included": 1, "excluded_font": 0}
+
+    monkeypatch.setattr("kanjitui.tui.app.download_selected_sources", fake_download_selected_sources)
+    monkeypatch.setattr("kanjitui.tui.app.rebuild_database_from_sources", fake_rebuild_database_from_sources)
+
+    app._run_setup_download()
+    try:
+        assert calls["selected"] == ("unihan",)
+        assert Path(calls["db_path"]) == db_path
+        assert any("build ok" in line for line in app.setup_logs)
+        assert app.conn.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        app.conn.close()

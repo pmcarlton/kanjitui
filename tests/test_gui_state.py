@@ -94,3 +94,19 @@ def test_gui_state_tab_focus_cycles_to_variants(tmp_path: Path) -> None:
         assert state.panel_focus in ("jp", "cn")
     finally:
         conn.close()
+
+
+def test_gui_state_reload_db_state_preserves_current_cp_when_possible(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        state = GuiState(conn)
+        cp = state.current_cp
+        assert cp is not None
+        state.move_next()
+        cp2 = state.current_cp
+        assert cp2 is not None
+        state.reload_db_state(current_cp=cp2)
+        assert state.current_cp == cp2
+    finally:
+        conn.close()
