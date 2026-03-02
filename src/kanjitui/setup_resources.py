@@ -353,10 +353,14 @@ def download_selected_sources(
         if progress is not None:
             progress(msg)
 
-    for key in selected:
+    total = len(selected)
+    for idx, key in enumerate(selected, start=1):
         if key not in SOURCES:
             results[key] = "unknown source"
+            log(f"[{idx}/{total}] Unknown source key: {key}")
             continue
+        label = SOURCES[key].label
+        log(f"[{idx}/{total}] Starting {label}")
         try:
             if key == "unihan":
                 _download_unihan(paths, log)
@@ -369,9 +373,10 @@ def download_selected_sources(
             elif key == "strokeorder":
                 _download_strokeorder(paths, log)
             results[key] = "ok"
+            log(f"[{idx}/{total}] Completed {label}")
         except Exception as exc:  # noqa: BLE001
             results[key] = f"error: {exc}"
-            log(f"{key} failed: {exc}")
+            log(f"[{idx}/{total}] Failed {label}: {exc}")
     return results
 
 
@@ -393,7 +398,8 @@ def rebuild_database_from_sources(
             paths=default_build_paths(paths.data_dir),
             font=None,
             enabled_providers=providers,
-        )
+        ),
+        progress=progress,
     )
     if progress is not None:
         progress(

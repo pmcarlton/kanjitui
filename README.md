@@ -31,6 +31,7 @@ Lean-package flow (TUI and GUI):
 
 - On first startup, an acknowledgements page is shown.
 - Press `Shift+S` to open Setup and select/download sources from inside the app.
+- Setup shows live progress feedback during downloads and automatic DB rebuild.
 - Setup view shows a per-source license/terms link on the right.
 - After setup downloads complete, the app automatically rebuilds `--db` from available sources.
 - Press `Shift+A` to reopen acknowledgements any time.
@@ -72,6 +73,14 @@ kanjitui --db data/db.sqlite
 ```bash
 kanjigui --db data/db.sqlite
 ```
+
+Set runtime GUI font family:
+
+```bash
+kanjigui --db data/db.sqlite --ui-font "Hiragino Sans"
+```
+
+or via environment: `KANJIGUI_FONT` / `KANJITUI_UI_FONT`.
 
 Make target:
 

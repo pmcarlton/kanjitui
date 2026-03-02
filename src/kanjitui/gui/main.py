@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sqlite3
 import sys
 
@@ -35,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jmdict", help="Path to JMdict XML")
     parser.add_argument("--cedict", help="Path to CC-CEDICT text file")
     parser.add_argument("--sentences", help="Path to optional sentence TSV")
+    parser.add_argument("--ui-font", help="GUI font family for runtime display")
     parser.add_argument("--no-font-filter", action="store_true", default=None, help="Disable font coverage filtering")
     parser.add_argument("--verbose", action="store_true", default=None, help="Verbose logging")
     parser.add_argument("--version", action="version", version=f"kanjigui {__version__}")
@@ -110,10 +112,16 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = connect(app_config.db_path)
     user_store = UserStore(app_config.user_db_path)
+    ui_font_family = args.ui_font or os.environ.get("KANJIGUI_FONT") or os.environ.get("KANJITUI_UI_FONT")
     try:
         # Warm one query early so the first frame is immediate.
         _ = db_query.available_frequency_profiles(conn)
-        run_gui(conn, normalizer_name=app_config.normalizer, user_store=user_store)
+        run_gui(
+            conn,
+            normalizer_name=app_config.normalizer,
+            user_store=user_store,
+            ui_font_family=ui_font_family,
+        )
     except KeyboardInterrupt:
         return 0
     finally:

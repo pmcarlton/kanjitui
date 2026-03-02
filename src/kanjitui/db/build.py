@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 import sqlite3
 import unicodedata
+from typing import Callable
 
 from kanjitui.db.migrations import rebuild_schema
 from kanjitui.models import CharAnnotations, CnWordEntry, JpWordEntry
@@ -296,7 +297,11 @@ def _build_search_keys(
     )
 
 
-def build_database(config: BuildConfig, provider_registry: ProviderRegistry | None = None) -> dict[str, int]:
+def build_database(
+    config: BuildConfig,
+    provider_registry: ProviderRegistry | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, int]:
     registry = provider_registry or default_build_registry()
     enabled_providers = registry.resolve_enabled(config.enabled_providers)
 
@@ -348,7 +353,17 @@ def build_database(config: BuildConfig, provider_registry: ProviderRegistry | No
             jp_freq_candidates: list[tuple[int, int]] = []
             cn_freq_candidates: list[tuple[int, int]] = []
 
+            total_merged = len(merged)
+            processed = 0
             for cp, record in sorted(merged.items()):
+                processed += 1
+                if progress is not None and (processed == 1 or processed % 2000 == 0 or processed == total_merged):
+                    progress(
+                        f"DB build progress: {processed}/{total_merged} "
+                        f"included={counts['included']} "
+                        f"excluded_no_annotation={counts['excluded_no_annotation']} "
+                        f"excluded_font={counts['excluded_font']}"
+                    )
                 if not _has_annotation(record):
                     counts["excluded_no_annotation"] += 1
                     continue

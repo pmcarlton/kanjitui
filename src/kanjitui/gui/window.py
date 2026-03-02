@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import html
 import math
+import os
 from pathlib import Path
+import re
 import sqlite3
 import webbrowser
 from typing import Callable
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QPlainTextEdit,
     QScrollArea,
     QTableWidget,
@@ -52,6 +55,43 @@ from kanjitui.variant_nav import VariantTarget, build_variant_targets
 from kanjitui.tui.navigation import build_strip
 from kanjitui.tui.radicals import kangxi_radical_glyph
 
+DEFAULT_UI_FONT_FAMILY = "Noto Sans Mono CJK"
+
+
+def resolve_gui_font_family(preferred: str | None) -> str:
+    db = QFontDatabase()
+    families = set(db.families())
+    candidates = [
+        preferred,
+        os.environ.get("KANJIGUI_FONT"),
+        os.environ.get("KANJITUI_UI_FONT"),
+        DEFAULT_UI_FONT_FAMILY,
+        "Noto Sans CJK JP",
+        "Hiragino Sans",
+        "PingFang SC",
+        "Menlo",
+        "Monaco",
+    ]
+    for family in candidates:
+        if family and family in families:
+            return family
+    return QApplication.font().family()
+
+
+def ui_font(widget: QWidget | None, size: int, weight: QFont.Weight | None = None) -> QFont:
+    family = DEFAULT_UI_FONT_FAMILY
+    current = widget
+    while current is not None:
+        candidate = getattr(current, "ui_font_family", None)
+        if isinstance(candidate, str) and candidate:
+            family = candidate
+            break
+        current = current.parentWidget()
+    font = QFont(family, size)
+    if weight is not None:
+        font.setWeight(weight)
+    return font
+
 
 class LiveTextDialog(QDialog):
     def __init__(self, title: str, on_close: Callable[[], None], parent: QWidget | None = None) -> None:
@@ -63,7 +103,7 @@ class LiveTextDialog(QDialog):
         layout = QVBoxLayout(self)
         self.text = QPlainTextEdit(self)
         self.text.setReadOnly(True)
-        self.text.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.text.setFont(ui_font(self, 14))
         layout.addWidget(self.text)
 
     def set_lines(self, lines: list[str]) -> None:
@@ -85,15 +125,15 @@ class SearchDialog(QDialog):
         layout = QVBoxLayout(self)
         self.query = QLineEdit(self)
         self.query.setPlaceholderText("Search: char, U+hex, kana, romaji, pinyin, gloss")
-        self.query.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.query.setFont(ui_font(self, 14))
         layout.addWidget(self.query)
 
         self.hint = QLabel("Enter: run/jump   Esc: close   Up/Down: select   Home/End: top/bottom", self)
-        self.hint.setFont(QFont("Noto Sans Mono CJK", 12))
+        self.hint.setFont(ui_font(self, 12))
         layout.addWidget(self.hint)
 
         self.results = QListWidget(self)
-        self.results.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.results.setFont(ui_font(self, 14))
         layout.addWidget(self.results)
 
         buttons = QHBoxLayout()
@@ -152,11 +192,11 @@ class BookmarkDialog(QDialog):
 
         layout = QVBoxLayout(self)
         hint = QLabel("Enter: jump   x: delete   Esc: close", self)
-        hint.setFont(QFont("Noto Sans Mono CJK", 12))
+        hint.setFont(ui_font(self, 12))
         layout.addWidget(hint)
 
         self.results = QListWidget(self)
-        self.results.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.results.setFont(ui_font(self, 14))
         layout.addWidget(self.results)
 
         row = QHBoxLayout()
@@ -235,7 +275,7 @@ class NoteEditorDialog(QDialog):
         layout = QVBoxLayout(self)
 
         self.editor = QPlainTextEdit(self)
-        self.editor.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.editor.setFont(ui_font(self, 14))
         self.editor.setPlainText(initial_text)
         layout.addWidget(self.editor)
 
@@ -261,7 +301,7 @@ class SetupDialog(QDialog):
             "Select sources then press Download Selected. You can run this any time via Shift-S.",
             self,
         )
-        hint.setFont(QFont("Noto Sans Mono CJK", 12))
+        hint.setFont(ui_font(self, 12))
         layout.addWidget(hint)
 
         self.checkboxes: dict[str, QCheckBox] = {}
@@ -295,8 +335,12 @@ class SetupDialog(QDialog):
 
         self.log = QPlainTextEdit(self)
         self.log.setReadOnly(True)
-        self.log.setFont(QFont("Noto Sans Mono CJK", 12))
+        self.log.setFont(ui_font(self, 12))
         layout.addWidget(self.log, 1)
+        self.progress = QProgressBar(self)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
 
         row = QHBoxLayout()
         self.download_btn = QPushButton("Download Selected", self)
@@ -318,18 +362,26 @@ class SetupDialog(QDialog):
         if not selected:
             self._append("No sources selected.")
             return
+        total_steps = len(selected) + 1  # downloads + auto-build
+        self.progress.setRange(0, total_steps)
+        self.progress.setValue(0)
         self.download_btn.setEnabled(False)
         self._append("Starting downloads ...")
 
         def _progress(msg: str) -> None:
             self._append(msg)
+            completed = re.match(r"^\[(\d+)/(\d+)\] Completed ", msg)
+            if completed:
+                self.progress.setValue(int(completed.group(1)))
+            elif msg.startswith("Rebuilding DB with providers:"):
+                self.progress.setValue(len(selected))
 
         results = download_selected_sources(selected, self.window.runtime_paths, progress=_progress)
         ok = sum(1 for status in results.values() if status == "ok")
         fail = sum(1 for status in results.values() if status != "ok")
         self._append(f"Completed: ok={ok} failed={fail}")
-        self._append("Starting automatic DB rebuild ...")
-        self.window._after_setup_download(results)
+        self.window._after_setup_download(results, progress=_progress)
+        self.progress.setValue(total_steps)
         self._append(self.window.state.message)
         self.download_btn.setEnabled(True)
 
@@ -345,7 +397,7 @@ class RadicalDialog(QDialog):
         root = QVBoxLayout(self)
 
         self.info = QLabel("Enter on radical: select radical   Enter on result: jump", self)
-        self.info.setFont(QFont("Noto Sans Mono CJK", 12))
+        self.info.setFont(ui_font(self, 12))
         root.addWidget(self.info)
 
         panel = QHBoxLayout()
@@ -361,7 +413,7 @@ class RadicalDialog(QDialog):
         self.grid.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.grid.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.grid.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.grid.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.grid.setFont(ui_font(self, 14))
         self.grid.horizontalHeader().setDefaultSectionSize(24)
         self.grid.verticalHeader().setDefaultSectionSize(24)
         self.grid.horizontalHeader().setMinimumSectionSize(20)
@@ -373,7 +425,7 @@ class RadicalDialog(QDialog):
         panel.addLayout(right, 1)
         stroke_row = QHBoxLayout()
         self.stroke_label = QLabel("strokes=all", self)
-        self.stroke_label.setFont(QFont("Noto Sans Mono CJK", 12))
+        self.stroke_label.setFont(ui_font(self, 12))
         self.stroke_prev = QPushButton("[", self)
         self.stroke_next = QPushButton("]", self)
         stroke_row.addWidget(self.stroke_label)
@@ -382,7 +434,7 @@ class RadicalDialog(QDialog):
         right.addLayout(stroke_row)
 
         self.results = QListWidget(self)
-        self.results.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.results.setFont(ui_font(self, 14))
         right.addWidget(self.results, 1)
 
         close_row = QHBoxLayout()
@@ -574,7 +626,7 @@ class StrokeAnimationDialog(QDialog):
             f"Source: {data.source_path.name}   Strokes: {len(data.strokes)}   Esc: close",
             self,
         )
-        self.info.setFont(QFont("Noto Sans Mono CJK", 12))
+        self.info.setFont(ui_font(self, 12))
         layout.addWidget(self.info)
         self.canvas = StrokeAnimationWidget(data, self)
         layout.addWidget(self.canvas, 1)
@@ -587,9 +639,10 @@ class StrokeAnimationDialog(QDialog):
 
 
 class KanjiGuiWindow(QMainWindow):
-    def __init__(self, state: GuiState) -> None:
+    def __init__(self, state: GuiState, ui_font_family: str | None = None) -> None:
         super().__init__()
         self.state = state
+        self.ui_font_family = ui_font_family or DEFAULT_UI_FONT_FAMILY
         self.setWindowTitle("kanjigui")
         self.resize(1460, 980)
         self.setMinimumSize(1100, 760)
@@ -610,11 +663,11 @@ class KanjiGuiWindow(QMainWindow):
 
     def _build_panel(self, title: str) -> tuple[QGroupBox, QPlainTextEdit]:
         box = QGroupBox(title, self)
-        box.setFont(QFont("Noto Sans Mono CJK", 16))
+        box.setFont(ui_font(self, 16))
         layout = QVBoxLayout(box)
         text = QPlainTextEdit(box)
         text.setReadOnly(True)
-        text.setFont(QFont("Noto Sans Mono CJK", 16))
+        text.setFont(ui_font(self, 16))
         layout.addWidget(text)
         return box, text
 
@@ -627,12 +680,12 @@ class KanjiGuiWindow(QMainWindow):
         grid.setVerticalSpacing(8)
 
         self.header_label = QLabel(self)
-        self.header_label.setFont(QFont("Noto Sans Mono CJK", 16, QFont.Weight.Bold))
+        self.header_label.setFont(ui_font(self, 16, QFont.Weight.Bold))
         self.header_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.header_label, 0, 0)
 
         self.nav_strip = QLabel(self)
-        self.nav_strip.setFont(QFont("Noto Sans Mono CJK", 18))
+        self.nav_strip.setFont(ui_font(self, 18))
         self.nav_strip.setTextFormat(Qt.TextFormat.RichText)
         self.nav_strip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.nav_strip, 1, 0)
@@ -665,26 +718,26 @@ class KanjiGuiWindow(QMainWindow):
 
         self.glyph_label = QLabel("?", self)
         self.glyph_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        self.glyph_label.setFont(QFont("Noto Sans CJK JP", 56))
+        self.glyph_label.setFont(ui_font(self, 56))
         self.glyph_label.setMinimumWidth(280)
         self.glyph_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         right_layout.addWidget(self.glyph_label)
 
         self.glyph_meta = QLabel(self)
         self.glyph_meta.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        self.glyph_meta.setFont(QFont("Noto Sans Mono CJK", 16))
+        self.glyph_meta.setFont(ui_font(self, 16))
         self.glyph_meta.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         right_layout.addWidget(self.glyph_meta)
         right_layout.addStretch(1)
         grid.addWidget(right, 0, 1, 3, 1)
 
         self.menu_label = QLabel(self)
-        self.menu_label.setFont(QFont("Noto Sans Mono CJK", 13, QFont.Weight.Bold))
+        self.menu_label.setFont(ui_font(self, 13, QFont.Weight.Bold))
         self.menu_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.menu_label, 3, 0, 1, 2)
 
         self.status_label = QLabel(self)
-        self.status_label.setFont(QFont("Noto Sans Mono CJK", 14))
+        self.status_label.setFont(ui_font(self, 14))
         self.status_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.status_label, 4, 0, 1, 2)
 
@@ -1175,7 +1228,11 @@ class KanjiGuiWindow(QMainWindow):
     def _ack_lines(self) -> list[str]:
         return acknowledgements_for_sources(self._available_sources())
 
-    def _after_setup_download(self, results: dict[str, str]) -> None:
+    def _after_setup_download(
+        self,
+        results: dict[str, str],
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
         ok = sum(1 for status in results.values() if status == "ok")
         fail = sum(1 for status in results.values() if status != "ok")
         self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
@@ -1188,6 +1245,8 @@ class KanjiGuiWindow(QMainWindow):
         current_cp = self.state.current_cp
         auto_build_ok = False
         try:
+            if progress is not None:
+                progress("Starting automatic DB rebuild ...")
             try:
                 self.state.conn.close()
             except Exception:
@@ -1195,7 +1254,7 @@ class KanjiGuiWindow(QMainWindow):
             _ = rebuild_database_from_sources(
                 paths=self.runtime_paths,
                 db_path=db_path,
-                progress=lambda msg: None,
+                progress=progress,
             )
             auto_build_ok = True
         except Exception as exc:  # noqa: BLE001
@@ -1365,13 +1424,20 @@ class KanjiGuiWindow(QMainWindow):
         event.accept()
 
 
-def run_gui(conn: sqlite3.Connection, normalizer_name: str = "default", user_store: UserStore | None = None) -> None:
+def run_gui(
+    conn: sqlite3.Connection,
+    normalizer_name: str = "default",
+    user_store: UserStore | None = None,
+    ui_font_family: str | None = None,
+) -> None:
     app = QApplication.instance()
     owns_app = app is None
     if app is None:
         app = QApplication([])
+    family = resolve_gui_font_family(ui_font_family)
+    app.setFont(QFont(family, 16))
     state = GuiState(conn, normalizer_name=normalizer_name, user_store=user_store)
-    win = KanjiGuiWindow(state)
+    win = KanjiGuiWindow(state, ui_font_family=family)
     win.show()
     if owns_app:
         app.exec()

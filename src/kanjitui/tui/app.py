@@ -110,6 +110,7 @@ class TuiApp:
         self.stroke_frame_idx = 0
         self.stroke_done = False
         self.stroke_canvas_dims = (0, 0)
+        self._stdscr: curses.window | None = None
         self.show_ack_overlay = False
         self.show_startup_overlay = False
         self.setup_open = False
@@ -291,6 +292,11 @@ class TuiApp:
             self.setup_logs.append(msg)
             if len(self.setup_logs) > 120:
                 self.setup_logs = self.setup_logs[-120:]
+            if self._stdscr is not None:
+                try:
+                    self._render(self._stdscr)
+                except curses.error:
+                    pass
 
         self._setup_results = download_selected_sources(
             selected=selected,
@@ -538,6 +544,7 @@ class TuiApp:
         return True
 
     def run(self, stdscr: curses.window) -> None:
+        self._stdscr = stdscr
         stdscr.keypad(True)
         while True:
             self._set_cursor_visibility()

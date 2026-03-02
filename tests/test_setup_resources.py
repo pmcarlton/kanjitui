@@ -7,6 +7,7 @@ from kanjitui.setup_resources import (
     build_enabled_providers,
     default_setup_selection,
     detect_available_sources,
+    download_selected_sources,
     RuntimePaths,
     SOURCES,
 )
@@ -73,3 +74,26 @@ def test_build_enabled_providers_order_and_filter() -> None:
         }
     )
     assert providers == ("unihan", "jmdict", "cedict", "sentences")
+
+
+def test_download_selected_sources_emits_step_progress(tmp_path: Path, monkeypatch) -> None:
+    paths = RuntimePaths(
+        data_dir=tmp_path / "raw",
+        strokeorder_dir=tmp_path / "strokeorder",
+        tatoeba_dir=tmp_path / "raw" / "tatoeba",
+    )
+    logs: list[str] = []
+
+    monkeypatch.setattr("kanjitui.setup_resources._download_unihan", lambda _p, _log: None)
+    monkeypatch.setattr("kanjitui.setup_resources._download_cedict", lambda _p, _log: None)
+
+    results = download_selected_sources(
+        ["unihan", "cedict"],
+        paths,
+        progress=logs.append,
+    )
+    assert results["unihan"] == "ok"
+    assert results["cedict"] == "ok"
+    assert any(line.startswith("[1/2] Starting Unicode Unihan") for line in logs)
+    assert any(line.startswith("[1/2] Completed Unicode Unihan") for line in logs)
+    assert any(line.startswith("[2/2] Starting CC-CEDICT") for line in logs)
