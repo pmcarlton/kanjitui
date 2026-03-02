@@ -1257,7 +1257,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_components = not self.state.show_components
             if self.state.show_components:
                 self.state.show_phonetic = False
-        elif text in ("s", "S"):
+        elif text == "s":
             self.state.show_phonetic = not self.state.show_phonetic
             if self.state.show_phonetic:
                 self.state.show_components = False
