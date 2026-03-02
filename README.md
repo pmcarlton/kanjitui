@@ -15,6 +15,7 @@ Optional extras:
 
 ```bash
 pip install -e .[build,test]
+pip install -e .[build,test,gui]
 ```
 
 ## Fetch Data
@@ -56,6 +57,20 @@ Equivalent CLI:
 kanjitui --db data/db.sqlite
 ```
 
+## Run GUI (`kanjigui`)
+
+`kanjigui` is a PySide6 desktop version with parity-focused keyboard controls and a large current glyph display in the top-right panel.
+
+```bash
+kanjigui --db data/db.sqlite
+```
+
+Make target:
+
+```bash
+make run-gui
+```
+
 ## Keybindings
 
 - `Right`/`Down`/`j`: next character
@@ -69,15 +84,16 @@ kanjitui --db data/db.sqlite
 - `1`: toggle JP pane
 - `2`: toggle CN pane
 - `3`: toggle sentence pane
-- `v`: toggle variants line
+- `v`: toggle variants pane (variant graph summary)
 - `p`: toggle provenance overlay
-- `g`: toggle variant-graph overlay
 - `c`: toggle component overlay
 - `s`: toggle phonetic-series overlay
+- `m`: toggle JP readings/word readings kana <-> romaji
+- `Shift+N`: hide/show no-reading glyphs (scope follows visible JP/CN or reading-focus)
 - `b`: toggle bookmark for current character
 - `n`: add a one-line note for current character
 - `u`: show user workspace overlay (notes/bookmarks/recent queries)
-- `i`: show CC-image links panel (`Enter`/`o` to open in browser)
+- `i`: open current glyph page on CCAMC
 - `?`: help/attribution overlay
 - `q`: quit
 

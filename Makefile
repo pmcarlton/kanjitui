@@ -2,7 +2,7 @@ PYTHON ?= python3
 DATA_DIR ?= data/raw
 DB_PATH ?= data/db.sqlite
 
-.PHONY: fetch-data build-sentences build-db test run
+.PHONY: fetch-data build-sentences build-db test run run-gui
 
 fetch-data:
 	bash scripts/fetch_data.sh "$(DATA_DIR)"
@@ -18,3 +18,6 @@ test:
 
 run:
 	$(PYTHON) -m kanjitui --db "$(DB_PATH)"
+
+run-gui:
+	$(PYTHON) -m kanjitui.gui.main --db "$(DB_PATH)"
