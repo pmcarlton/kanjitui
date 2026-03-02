@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import re
+import sys
 from xml.etree import ElementTree as ET
 
 
@@ -415,8 +416,29 @@ def find_strokeorder_root() -> Path | None:
     cwd = Path.cwd()
     candidates = [
         cwd / "StrokeOrder",
+        cwd / "data" / "strokeorder",
         cwd.parent / "StrokeOrder",
     ]
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mp = Path(str(meipass))
+        candidates.extend(
+            [
+                mp / "StrokeOrder",
+                mp / "data" / "strokeorder",
+            ]
+        )
+
+    exe_parent = Path(sys.executable).resolve().parent
+    candidates.extend(
+        [
+            exe_parent / "StrokeOrder",
+            exe_parent / "data" / "strokeorder",
+            exe_parent.parent / "Resources" / "StrokeOrder",
+            exe_parent.parent / "Resources" / "data" / "strokeorder",
+        ]
+    )
 
     here = Path(__file__).resolve()
     for parent in here.parents:

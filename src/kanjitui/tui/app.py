@@ -9,6 +9,15 @@ from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
+from kanjitui.setup_resources import (
+    SOURCE_ORDER,
+    SOURCES,
+    acknowledgements_for_sources,
+    default_setup_selection,
+    detect_available_sources,
+    download_selected_sources,
+    resolve_runtime_paths,
+)
 from kanjitui.strokeorder import StrokeOrderData, StrokeOrderRepository, build_tui_stroke_frames
 from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
 from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
@@ -89,13 +98,26 @@ class TuiApp:
         self._variant_cache_cp: int | None = None
         self._variant_graph: dict | None = None
         self._variant_targets: list[VariantTarget] = []
-        self.stroke_repo = StrokeOrderRepository()
+        self.runtime_paths = resolve_runtime_paths(self.user_store)
+        self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
         self.stroke_open = False
         self.stroke_data: StrokeOrderData | None = None
         self.stroke_frames: list[list[str]] = []
         self.stroke_frame_idx = 0
         self.stroke_done = False
         self.stroke_canvas_dims = (0, 0)
+        self.show_ack_overlay = False
+        self.show_startup_overlay = False
+        self.setup_open = False
+        self.setup_rows = [key for key in SOURCE_ORDER if key in SOURCES]
+        self.setup_selected: set[str] = set()
+        self.setup_idx = 0
+        self.setup_logs: list[str] = []
+        self._setup_results: dict[str, str] = {}
+        if self.user_store is not None:
+            self.show_startup_overlay = not self.user_store.get_flag("startup_seen", default=False)
+        else:
+            self.show_startup_overlay = True
 
         self.router = KeyRouter(self._current_mode, self._handle_normal_key)
         self.router.register("search", self._handle_search_key)
@@ -103,6 +125,8 @@ class TuiApp:
         self.router.register("note", self._handle_note_key)
         self.router.register("bookmark", self._handle_bookmark_key)
         self.router.register("stroke", self._handle_stroke_key)
+        self.router.register("setup", self._handle_setup_key)
+        self.router.register("ack", self._handle_ack_key)
 
     @property
     def current_cp(self) -> int | None:
@@ -232,6 +256,48 @@ class TuiApp:
         self.bookmark_idx = 0
         self.bookmark_open = True
         self.message = f"Bookmarks: {len(self.bookmark_rows)}"
+
+    def _dismiss_startup_overlay(self) -> None:
+        if not self.show_startup_overlay:
+            return
+        self.show_startup_overlay = False
+        if self.user_store is not None:
+            self.user_store.set_flag("startup_seen", True)
+
+    def _available_sources(self) -> dict[str, bool]:
+        return detect_available_sources(self.runtime_paths)
+
+    def _open_setup_overlay(self) -> None:
+        available = self._available_sources()
+        self.setup_selected = set(default_setup_selection(available))
+        self.setup_idx = 0
+        self.setup_logs = []
+        self._setup_results = {}
+        self.setup_open = True
+        self.message = "Setup: select sources to download"
+
+    def _run_setup_download(self) -> None:
+        selected = [key for key in self.setup_rows if key in self.setup_selected]
+        if not selected:
+            self.message = "Setup: no sources selected"
+            return
+        self.setup_logs.append("Starting downloads ...")
+
+        def _progress(msg: str) -> None:
+            self.setup_logs.append(msg)
+            if len(self.setup_logs) > 120:
+                self.setup_logs = self.setup_logs[-120:]
+
+        self._setup_results = download_selected_sources(
+            selected=selected,
+            paths=self.runtime_paths,
+            progress=_progress,
+        )
+        ok = sum(1 for status in self._setup_results.values() if status == "ok")
+        fail = sum(1 for status in self._setup_results.values() if status != "ok")
+        self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
+        self.setup_logs.append(f"Completed: ok={ok} failed={fail}")
+        self.message = f"Setup download completed: ok={ok} failed={fail}"
 
     def _current_stroke_char(self) -> str | None:
         cp = self.current_cp
@@ -428,6 +494,10 @@ class TuiApp:
                 break
 
     def _current_mode(self) -> str:
+        if self.show_ack_overlay:
+            return "ack"
+        if self.setup_open:
+            return "setup"
         if self.stroke_open:
             return "stroke"
         if self.search_open:
@@ -464,6 +534,7 @@ class TuiApp:
 
     def _handle_normal_key(self, key: KeyInput) -> bool:
         key = self._normalize_text_key(key)
+        self._dismiss_startup_overlay()
         if isinstance(key, str):
             return True
         if key in (ord("q"), ord("Q")):
@@ -553,7 +624,7 @@ class TuiApp:
             if self.show_components:
                 self.show_phonetic = False
             return True
-        if key in (ord("s"), ord("S")):
+        if key in (ord("s"),):
             self.show_phonetic = not self.show_phonetic
             if self.show_phonetic:
                 self.show_components = False
@@ -606,6 +677,12 @@ class TuiApp:
         if key == ord("?"):
             self.show_help = not self.show_help
             return True
+        if key in (ord("A"),):
+            self.show_ack_overlay = not self.show_ack_overlay
+            return True
+        if key in (ord("S"),):
+            self._open_setup_overlay()
+            return True
         if key in (ord("t"), ord("T")):
             self._open_stroke_overlay()
             return True
@@ -638,6 +715,66 @@ class TuiApp:
             self.stroke_done = False
             self.stroke_canvas_dims = (0, 0)
             self.message = "Closed stroke animation"
+            return True
+        return True
+
+    def _handle_ack_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
+        if key in (27, ord("A"), ord("a")):
+            self.show_ack_overlay = False
+            self.message = "Closed acknowledgements"
+            return True
+        return True
+
+    def _handle_setup_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
+        if key in (27, ord("S"), ord("s")):
+            self.setup_open = False
+            self.message = "Closed setup"
+            return True
+        if key in (curses.KEY_UP, ord("k")):
+            self.setup_idx = max(0, self.setup_idx - 1)
+            return True
+        if key in (curses.KEY_DOWN, ord("j")):
+            self.setup_idx = min(len(self.setup_rows) - 1, self.setup_idx + 1)
+            return True
+        if key == ord(" "):
+            if self.setup_rows:
+                source = self.setup_rows[self.setup_idx]
+                if source in self.setup_selected:
+                    self.setup_selected.discard(source)
+                else:
+                    self.setup_selected.add(source)
+            return True
+        if key in (10, 13, curses.KEY_ENTER):
+            if self.setup_rows:
+                source = self.setup_rows[self.setup_idx]
+                if source in self.setup_selected:
+                    self.setup_selected.discard(source)
+                else:
+                    self.setup_selected.add(source)
+            return True
+        if key in (ord("d"), ord("D")):
+            self._run_setup_download()
+            return True
+        if key in (ord("a"),):
+            self.setup_selected = set(self.setup_rows)
+            return True
+        if key in (ord("n"),):
+            self.setup_selected.clear()
+            return True
+        if ord("1") <= key <= ord("9"):
+            idx = key - ord("1")
+            if 0 <= idx < len(self.setup_rows):
+                source = self.setup_rows[idx]
+                if source in self.setup_selected:
+                    self.setup_selected.discard(source)
+                else:
+                    self.setup_selected.add(source)
             return True
         return True
 
@@ -985,7 +1122,21 @@ class TuiApp:
 
         cp = self.current_cp
         if cp is None:
-            self._safe_add(stdscr, 0, 0, "No characters in DB. Build and rerun.")
+            self._safe_add(stdscr, 0, 0, "No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
+            menu_line = (
+                "Setup:S  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
+                f"{self.runtime_paths.data_dir})"
+            )
+            self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
+            self._safe_add(stdscr, h - 1, 0, self.message, curses.A_BOLD)
+            if self.show_help:
+                self._render_help(stdscr)
+            if self.setup_open:
+                self._render_setup_overlay(stdscr)
+            if self.show_ack_overlay:
+                self._render_ack_overlay(stdscr, startup=False)
+            if self.show_startup_overlay:
+                self._render_ack_overlay(stdscr, startup=True)
             stdscr.refresh()
             return
 
@@ -1108,7 +1259,7 @@ class TuiApp:
 
         menu_line = (
             "Nav:←/→/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Setup:S  Ack:A"
         )
         if stroke_available:
             menu_line += "  Stroke:t"
@@ -1137,6 +1288,12 @@ class TuiApp:
             self._render_radical_overlay(stdscr)
         if self.stroke_open:
             self._render_stroke_overlay(stdscr)
+        if self.setup_open:
+            self._render_setup_overlay(stdscr)
+        if self.show_ack_overlay:
+            self._render_ack_overlay(stdscr, startup=False)
+        if self.show_startup_overlay:
+            self._render_ack_overlay(stdscr, startup=True)
 
         stdscr.refresh()
 
@@ -1157,6 +1314,8 @@ class TuiApp:
             "Notes: n per-glyph editor, g global editor",
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
             "Stroke order: t popup (only when data exists for current glyph)",
+            "Setup: Shift-S opens source setup/download menu",
+            "Acknowledgements: Shift-A overlay",
             "CCAMC: i open glyph page",
             "Global: ? Help, q Quit",
             "Data: Unicode Unihan, EDRDG KANJIDIC2/JMdict, CC-CEDICT",
@@ -1470,6 +1629,64 @@ class TuiApp:
                 text += f" [{tag}]"
             row_attr = curses.A_BOLD if idx == self.bookmark_idx else 0
             self._safe_add(stdscr, top + 2 + offset, left + 2, text, row_attr)
+
+    def _render_setup_overlay(self, stdscr: curses.window) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(22, h - 2)
+        box_w = min(110, w - 2)
+        top = max(1, (h - box_h) // 2)
+        left = max(1, (w - box_w) // 2)
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Setup (Lean Package)")
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            "Up/Down: move  Space/Enter/1-9: toggle  d: download  a: all  n: none  Esc: close",
+            curses.A_BOLD,
+        )
+        available = self._available_sources()
+        max_rows = min(8, box_h - 8)
+        for row in range(max_rows):
+            if row >= len(self.setup_rows):
+                break
+            key = self.setup_rows[row]
+            spec = SOURCES[key]
+            checked = "x" if key in self.setup_selected else " "
+            status = "installed" if available.get(key, False) else "missing"
+            marker = "▶" if row == self.setup_idx else " "
+            text = f"{marker} {row + 1}. [{checked}] {spec.label:<34}  ({status})"
+            attr = curses.A_BOLD if row == self.setup_idx else 0
+            self._safe_add(stdscr, top + 2 + row, left + 2, text, attr)
+
+        self._safe_add(stdscr, top + 2 + max_rows, left + 2, "Logs:", curses.A_BOLD)
+        log_rows = box_h - (6 + max_rows)
+        start = max(0, len(self.setup_logs) - log_rows)
+        for i, line in enumerate(self.setup_logs[start : start + log_rows]):
+            self._safe_add(stdscr, top + 3 + max_rows + i, left + 2, line[: max(0, box_w - 4)])
+
+    def _render_ack_overlay(self, stdscr: curses.window, startup: bool) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(22, h - 2)
+        box_w = min(120, w - 2)
+        top = max(1, (h - box_h) // 2)
+        left = max(1, (w - box_w) // 2)
+        title = "Startup / Acknowledgements" if startup else "Acknowledgements"
+        self._draw_box(stdscr, top, left, box_h, box_w, title=title)
+        presence = self._available_sources()
+        lines = acknowledgements_for_sources(presence)
+        if startup:
+            lines = [
+                "Welcome to kanjitui.",
+                "Press any key to dismiss this page.",
+                "Press Shift-S for setup downloads, Shift-A to reopen acknowledgements.",
+                "",
+            ] + lines
+        else:
+            lines.insert(0, "Shift-A or Esc closes this overlay.")
+            lines.insert(1, "")
+        max_rows = box_h - 2
+        for i, line in enumerate(lines[:max_rows]):
+            self._safe_add(stdscr, top + 1 + i, left + 2, line[: max(0, box_w - 4)])
 
     def _render_stroke_overlay(self, stdscr: curses.window) -> None:
         if self.stroke_data is None:

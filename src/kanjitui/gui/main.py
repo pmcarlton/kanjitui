@@ -97,10 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             f"({counts['excluded_font']} excluded by font filter)."
         )
 
-    if not app_config.db_path.exists():
-        print(f"Database missing: {app_config.db_path}", file=sys.stderr)
-        print("Run `kanjigui --build` first (or `make build-db`).", file=sys.stderr)
-        return 2
+    app_config.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         from kanjitui.gui.window import run_gui
@@ -126,4 +123,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

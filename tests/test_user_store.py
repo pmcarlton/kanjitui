@@ -24,3 +24,13 @@ def test_user_store_bookmark_note_query(tmp_path: Path) -> None:
 
     store.save_query("han4")
     assert "han4" in store.recent_queries(limit=5)
+
+
+def test_user_store_flags_roundtrip(tmp_path: Path) -> None:
+    store = UserStore(tmp_path / "user.sqlite")
+    assert store.get_flag("startup_seen", default=False) is False
+    assert store.get_flag("startup_seen", default=True) is True
+    store.set_flag("startup_seen", True)
+    assert store.get_flag("startup_seen", default=False) is True
+    store.set_flag("startup_seen", False)
+    assert store.get_flag("startup_seen", default=True) is False

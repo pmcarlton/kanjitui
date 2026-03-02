@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QGridLayout,
@@ -34,6 +35,15 @@ from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.search import normalize as search_normalize
+from kanjitui.setup_resources import (
+    SOURCE_ORDER,
+    SOURCES,
+    acknowledgements_for_sources,
+    default_setup_selection,
+    detect_available_sources,
+    download_selected_sources,
+    resolve_runtime_paths,
+)
 from kanjitui.strokeorder import StrokeOrderData, StrokeOrderRepository
 from kanjitui.variant_nav import VariantTarget, build_variant_targets
 from kanjitui.tui.navigation import build_strip
@@ -234,6 +244,73 @@ class NoteEditorDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.editor.moveCursor(self.editor.textCursor().MoveOperation.End)
+
+
+class SetupDialog(QDialog):
+    def __init__(self, window: "KanjiGuiWindow", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.window = window
+        self.setWindowTitle("Setup (Lean Package)")
+        self.resize(920, 640)
+
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "Select sources then press Download Selected. You can run this any time via Shift-S.",
+            self,
+        )
+        hint.setFont(QFont("Noto Sans Mono CJK", 12))
+        layout.addWidget(hint)
+
+        self.checkboxes: dict[str, QCheckBox] = {}
+        presence = self.window._available_sources()
+        defaults = set(default_setup_selection(presence))
+        for key in SOURCE_ORDER:
+            if key not in SOURCES:
+                continue
+            spec = SOURCES[key]
+            status = "installed" if presence.get(key, False) else "missing"
+            cb = QCheckBox(f"{spec.label} ({status})", self)
+            cb.setChecked(key in defaults)
+            self.checkboxes[key] = cb
+            layout.addWidget(cb)
+
+        self.log = QPlainTextEdit(self)
+        self.log.setReadOnly(True)
+        self.log.setFont(QFont("Noto Sans Mono CJK", 12))
+        layout.addWidget(self.log, 1)
+
+        row = QHBoxLayout()
+        self.download_btn = QPushButton("Download Selected", self)
+        self.close_btn = QPushButton("Close", self)
+        row.addWidget(self.download_btn)
+        row.addWidget(self.close_btn)
+        layout.addLayout(row)
+
+        self.download_btn.clicked.connect(self._run_download)
+        self.close_btn.clicked.connect(self.accept)
+
+    def _append(self, text: str) -> None:
+        self.log.appendPlainText(text)
+        self.log.ensureCursorVisible()
+        QApplication.processEvents()
+
+    def _run_download(self) -> None:
+        selected = [key for key, cb in self.checkboxes.items() if cb.isChecked()]
+        if not selected:
+            self._append("No sources selected.")
+            return
+        self.download_btn.setEnabled(False)
+        self._append("Starting downloads ...")
+
+        def _progress(msg: str) -> None:
+            self._append(msg)
+
+        results = download_selected_sources(selected, self.window.runtime_paths, progress=_progress)
+        ok = sum(1 for status in results.values() if status == "ok")
+        fail = sum(1 for status in results.values() if status != "ok")
+        self._append(f"Completed: ok={ok} failed={fail}")
+        self.window._after_setup_download(results)
+        self.download_btn.setEnabled(True)
 
 
 class RadicalDialog(QDialog):
@@ -499,7 +576,13 @@ class KanjiGuiWindow(QMainWindow):
         self._variant_cache_cp: int | None = None
         self._variant_graph: dict | None = None
         self._variant_targets: list[VariantTarget] = []
-        self.stroke_repo = StrokeOrderRepository()
+        self.runtime_paths = resolve_runtime_paths(self.state.user_store)
+        self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
+        self.show_ack_overlay = False
+        if self.state.user_store is not None:
+            self.show_startup_overlay = not self.state.user_store.get_flag("startup_seen", default=False)
+        else:
+            self.show_startup_overlay = True
         self._stroke_window: StrokeAnimationDialog | None = None
         self._build_ui()
         self.refresh_view()
@@ -723,7 +806,14 @@ class KanjiGuiWindow(QMainWindow):
         lines.extend([f"- {q}" for q in queries[:3]] or ["(none)"])
         return lines
 
-    def _sync_overlay(self, key: str, enabled: bool, title: str, lines: list[str], attr_name: str) -> None:
+    def _sync_overlay(
+        self,
+        key: str,
+        enabled: bool,
+        title: str,
+        lines: list[str],
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
         dlg = self._overlays.get(key)
         if not enabled:
             if dlg is not None:
@@ -733,7 +823,8 @@ class KanjiGuiWindow(QMainWindow):
 
         if dlg is None:
             def _on_close() -> None:
-                setattr(self.state, attr_name, False)
+                if on_close is not None:
+                    on_close()
                 self._overlays.pop(key, None)
                 self.refresh_view()
 
@@ -764,11 +855,13 @@ class KanjiGuiWindow(QMainWindow):
                 "Bookmarks list: x deletes selected bookmark",
                 "Notes: n per-glyph editor, g global editor",
                 "Editor: Enter newline, Save button commits",
+                "Setup: Shift-S source setup/download menu",
+                "Acknowledgements: Shift-A overlay",
                 "Stroke order: t popup (only when data exists)",
                 "CCAMC: i open glyph page",
                 "Global: ? Help, q Quit",
             ],
-            "show_help",
+            on_close=lambda: setattr(self.state, "show_help", False),
         )
 
         prov = db_query.get_provenance(self.state.conn, cp, limit=100)
@@ -780,7 +873,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_provenance,
             "Provenance",
             prov_lines,
-            "show_provenance",
+            on_close=lambda: setattr(self.state, "show_provenance", False),
         )
 
         comp = db_query.get_components(self.state.conn, cp)
@@ -790,7 +883,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_components,
             "Components",
             comp_lines,
-            "show_components",
+            on_close=lambda: setattr(self.state, "show_components", False),
         )
 
         ph = db_query.get_phonetic_series(self.state.conn, cp, limit=120)
@@ -808,7 +901,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_phonetic,
             "Phonetic Series",
             ph_lines,
-            "show_phonetic",
+            on_close=lambda: setattr(self.state, "show_phonetic", False),
         )
 
         self._sync_overlay(
@@ -816,13 +909,46 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_user_overlay,
             "User Workspace",
             self._format_user_overlay(cp),
-            "show_user_overlay",
+            on_close=lambda: setattr(self.state, "show_user_overlay", False),
+        )
+
+        self._sync_overlay(
+            "ack",
+            self.show_ack_overlay,
+            "Acknowledgements",
+            self._ack_lines(),
+            on_close=lambda: setattr(self, "show_ack_overlay", False),
+        )
+        startup_lines = [
+            "Welcome to kanjigui.",
+            "Press any key to dismiss this page.",
+            "Shift-S opens setup/download menu.",
+            "Shift-A reopens acknowledgements.",
+            "",
+        ] + self._ack_lines()
+        self._sync_overlay(
+            "startup",
+            self.show_startup_overlay,
+            "Startup",
+            startup_lines,
+            on_close=self._dismiss_startup_overlay,
         )
 
     def refresh_view(self) -> None:
         detail = self._current_detail()
         if detail is None:
-            self.header_label.setText("No characters in DB. Build and rerun.")
+            self.header_label.setText("No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
+            self.nav_strip.setText("")
+            self.glyph_label.setText("?")
+            self.glyph_meta.setText("")
+            self.jp_text.setPlainText("")
+            self.cn_text.setPlainText("")
+            self.sent_text.setPlainText("")
+            self.var_text.setPlainText("")
+            self.menu_label.setText("Setup:S  Ack:A  Help:?  Quit:q")
+            self.status_label.setText(self.state.message)
+            fake_detail = {"cp": 0}
+            self._sync_overlays(fake_detail)
             return
 
         cp = int(detail["cp"])
@@ -948,7 +1074,7 @@ class KanjiGuiWindow(QMainWindow):
         stroke_available = self.stroke_repo.has_char(detail["ch"])
         menu_line = (
             "Nav:<-/->/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Setup:S  Ack:A"
         )
         if stroke_available:
             menu_line += "  Stroke:t"
@@ -1015,6 +1141,32 @@ class KanjiGuiWindow(QMainWindow):
             self.state.message = f"Opened CCAMC for {chr(cp)}"
         self.refresh_view()
 
+    def _dismiss_startup_overlay(self) -> None:
+        if not self.show_startup_overlay:
+            return
+        self.show_startup_overlay = False
+        if self.state.user_store is not None:
+            self.state.user_store.set_flag("startup_seen", True)
+
+    def _available_sources(self) -> dict[str, bool]:
+        return detect_available_sources(self.runtime_paths)
+
+    def _ack_lines(self) -> list[str]:
+        return acknowledgements_for_sources(self._available_sources())
+
+    def _after_setup_download(self, results: dict[str, str]) -> None:
+        ok = sum(1 for status in results.values() if status == "ok")
+        fail = sum(1 for status in results.values() if status != "ok")
+        self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
+        self.state.message = f"Setup download completed: ok={ok} failed={fail}"
+        self.refresh_view()
+
+    def _open_setup_dialog(self) -> None:
+        self._dismiss_startup_overlay()
+        dlg = SetupDialog(self, self)
+        dlg.exec()
+        self.refresh_view()
+
     def _stroke_available_for_current(self) -> bool:
         cp = self.state.current_cp
         if cp is None:
@@ -1053,6 +1205,7 @@ class KanjiGuiWindow(QMainWindow):
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         key = event.key()
         text = event.text()
+        self._dismiss_startup_overlay()
 
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.state.panel_focus == "variants" and self.state.show_variants:
@@ -1136,6 +1289,11 @@ class KanjiGuiWindow(QMainWindow):
         elif text in ("r", "R"):
             self._open_radicals()
             return
+        elif text == "S":
+            self._open_setup_dialog()
+            return
+        elif text == "A":
+            self.show_ack_overlay = not self.show_ack_overlay
         elif text in ("t", "T"):
             self._open_stroke_window()
             return

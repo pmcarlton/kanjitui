@@ -188,3 +188,36 @@ def test_no_reading_filter_advances_to_next_glyph_when_current_filtered(tmp_path
         assert app.current_cp == expected
     finally:
         conn.close()
+
+
+def test_shift_s_opens_setup_and_s_toggles_phonetic(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        assert app.setup_open is False
+        assert app.show_phonetic is False
+
+        assert app._handle_normal_key(ord("S")) is True
+        assert app.setup_open is True
+        assert app.show_phonetic is False
+
+        assert app._handle_setup_key(27) is True
+        assert app.setup_open is False
+
+        assert app._handle_normal_key(ord("s")) is True
+        assert app.show_phonetic is True
+    finally:
+        conn.close()
+
+
+def test_startup_overlay_dismissed_on_non_ascii_input(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        app.show_startup_overlay = True
+        assert app._handle_normal_key("角") is True
+        assert app.show_startup_overlay is False
+    finally:
+        conn.close()

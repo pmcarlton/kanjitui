@@ -27,6 +27,12 @@ make fetch-data
 This downloads Unihan, CC-CEDICT, KANJIDIC2, and JMdict into `data/raw/`.
 EDRDG attribution and license terms still apply to KANJIDIC2/JMdict.
 
+Lean-package flow (TUI and GUI):
+
+- On first startup, an acknowledgements page is shown.
+- Press `Shift+S` to open Setup and select/download sources from inside the app.
+- Press `Shift+A` to reopen acknowledgements any time.
+
 ## Build Database
 
 ```bash
@@ -97,11 +103,13 @@ make run-gui
 - `n`: open per-glyph multiline note editor (prefilled with glyph + codepoint)
 - `g`: open global multiline note editor
 - `t`: open stroke-order animation popup/window (only when stroke data exists for current glyph)
+- `Shift+S`: open setup/download menu
+- `Shift+A`: open acknowledgements overlay
 - Variants panel marker: `▶` means jumpable, `X` means currently filtered out
 - Note editor: `Enter` inserts newline; save via UI `Save` button (GUI) or `Ctrl+S` (TUI)
 - `u`: show user workspace overlay (notes/bookmarks/recent queries)
 - `i`: open current glyph page on CCAMC
-- `?`: help/attribution overlay
+- `?`: help overlay
 - `q`: quit
 
 ## Search Syntax
@@ -145,8 +153,9 @@ make build-sentences
 
 Optional stroke-order integration:
 
-- Clone [StrokeOrder](https://github.com/Svampis/StrokeOrder) in the project root as `StrokeOrder/`, or set `KANJITUI_STROKEORDER_DIR` to that checkout path.
-- App uses SVG files under `StrokeOrder/kanji/` for popup animation in TUI/GUI.
+- Use `Shift+S` setup menu and select StrokeOrder to download and install bundled stroke data.
+- Or provide a custom path via `KANJITUI_STROKEORDER_DIR`.
+- App uses SVG files under `<strokeorder_dir>/kanji/` for popup animation in TUI/GUI.
 
 ## Data Layout
 

@@ -150,10 +150,11 @@ def main(argv: list[str] | None = None) -> int:
         if not export_requested:
             return 0
 
-    if not app_config.db_path.exists():
+    if not app_config.db_path.exists() and export_requested:
         print(f"Database missing: {app_config.db_path}", file=sys.stderr)
         print("Run `kanjitui --build` first (or `make build-db`).", file=sys.stderr)
         return 2
+    app_config.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = connect(app_config.db_path)
     user_store = UserStore(app_config.user_db_path)

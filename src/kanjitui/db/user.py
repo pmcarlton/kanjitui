@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS saved_queries (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS user_flags (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_user_notes_cp ON user_notes(cp, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_global_notes_created ON user_global_notes(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_saved_queries_created ON saved_queries(created_at DESC);
@@ -169,5 +175,33 @@ class UserStore:
                 (limit,),
             ).fetchall()
             return [str(row[0]) for row in rows]
+        finally:
+            conn.close()
+
+    def get_flag(self, key: str, default: bool = False) -> bool:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT value FROM user_flags WHERE key = ?", (key,)).fetchone()
+            if row is None:
+                return default
+            value = str(row[0]).strip().lower()
+            return value in {"1", "true", "yes", "on"}
+        finally:
+            conn.close()
+
+    def set_flag(self, key: str, value: bool) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO user_flags(key, value, updated_at)
+                    VALUES(?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value=excluded.value,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (key, "1" if value else "0"),
+                )
         finally:
             conn.close()

@@ -29,10 +29,10 @@ This notice is informational and does not replace upstream license terms.
 
 ## Optional Stroke Animation Integration
 
-### StrokeOrder (optional local checkout)
+### StrokeOrder (optional bundled download or local checkout)
 - Source: https://github.com/Svampis/StrokeOrder
 - Role: local SVG stroke-order assets used by `kanjitui`/`kanjigui` when available
-- Detection: repository clone in `StrokeOrder/` or `KANJITUI_STROKEORDER_DIR`
+- Detection: setup-download target in `data/strokeorder/`, repository clone in `StrokeOrder/`, or `KANJITUI_STROKEORDER_DIR`
 
 ### KanjiVG (via StrokeOrder assets)
 - Source: https://kanjivg.tagaini.net/
@@ -58,4 +58,3 @@ This notice is informational and does not replace upstream license terms.
 ### Python
 - Source: https://www.python.org/
 - License: PSF License
-
