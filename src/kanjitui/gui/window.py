@@ -6,8 +6,8 @@ import sqlite3
 import webbrowser
 from typing import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QKeyEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -34,6 +34,7 @@ from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.search import normalize as search_normalize
+from kanjitui.strokeorder import StrokeOrderData, StrokeOrderRepository
 from kanjitui.variant_nav import VariantTarget, build_variant_targets
 from kanjitui.tui.navigation import build_strip
 from kanjitui.tui.radicals import kangxi_radical_glyph
@@ -383,6 +384,110 @@ class RadicalDialog(QDialog):
         super().keyPressEvent(event)
 
 
+class StrokeAnimationWidget(QWidget):
+    def __init__(self, data: StrokeOrderData, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.data = data
+        self.completed_strokes = 0
+        self.current_stroke = 0
+        self.current_points = 1
+        self.done = False
+        self.timer = QTimer(self)
+        self.timer.setInterval(16)
+        self.timer.timeout.connect(self._advance_frame)
+        self.timer.start()
+        self.setMinimumSize(420, 420)
+
+    def _advance_frame(self) -> None:
+        if self.done:
+            return
+        if self.current_stroke >= len(self.data.strokes):
+            self.done = True
+            self.timer.stop()
+            self.update()
+            return
+        stroke = self.data.strokes[self.current_stroke]
+        if len(stroke) <= 1:
+            self.completed_strokes = self.current_stroke + 1
+            self.current_stroke += 1
+            self.current_points = 1
+            return
+        step = max(1, len(stroke) // 26)
+        self.current_points += step
+        if self.current_points >= len(stroke):
+            self.current_points = len(stroke)
+            self.completed_strokes = self.current_stroke + 1
+            self.current_stroke += 1
+            self.current_points = 1
+        self.update()
+
+    def _map_point(self, x: float, y: float) -> tuple[float, float]:
+        margin = 20.0
+        width = max(1.0, float(self.width()) - margin * 2.0)
+        height = max(1.0, float(self.height()) - margin * 2.0)
+        scale = min(width / max(1.0, self.data.width), height / max(1.0, self.data.height))
+        draw_w = self.data.width * scale
+        draw_h = self.data.height * scale
+        ox = (self.width() - draw_w) * 0.5
+        oy = (self.height() - draw_h) * 0.5
+        return ox + x * scale, oy + y * scale
+
+    def _draw_stroke(self, painter: QPainter, stroke: list[tuple[float, float]], limit: int) -> None:
+        if limit <= 1 or not stroke:
+            return
+        points = stroke[: min(limit, len(stroke))]
+        prev = self._map_point(points[0][0], points[0][1])
+        for x, y in points[1:]:
+            cur = self._map_point(x, y)
+            painter.drawLine(
+                int(round(prev[0])),
+                int(round(prev[1])),
+                int(round(cur[0])),
+                int(round(cur[1])),
+            )
+            prev = cur
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(250, 250, 250))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor(0, 0, 0))
+        pen.setWidth(3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+
+        for idx in range(min(self.completed_strokes, len(self.data.strokes))):
+            self._draw_stroke(painter, self.data.strokes[idx], len(self.data.strokes[idx]))
+
+        if self.current_stroke < len(self.data.strokes):
+            self._draw_stroke(painter, self.data.strokes[self.current_stroke], self.current_points)
+
+        painter.end()
+
+
+class StrokeAnimationDialog(QDialog):
+    def __init__(self, data: StrokeOrderData, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Stroke Order: {data.ch}")
+        self.resize(560, 620)
+        layout = QVBoxLayout(self)
+        self.info = QLabel(
+            f"Source: {data.source_path.name}   Strokes: {len(data.strokes)}   Esc: close",
+            self,
+        )
+        self.info.setFont(QFont("Noto Sans Mono CJK", 12))
+        layout.addWidget(self.info)
+        self.canvas = StrokeAnimationWidget(data, self)
+        layout.addWidget(self.canvas, 1)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
+
+
 class KanjiGuiWindow(QMainWindow):
     def __init__(self, state: GuiState) -> None:
         super().__init__()
@@ -394,6 +499,8 @@ class KanjiGuiWindow(QMainWindow):
         self._variant_cache_cp: int | None = None
         self._variant_graph: dict | None = None
         self._variant_targets: list[VariantTarget] = []
+        self.stroke_repo = StrokeOrderRepository()
+        self._stroke_window: StrokeAnimationDialog | None = None
         self._build_ui()
         self.refresh_view()
 
@@ -657,6 +764,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Bookmarks list: x deletes selected bookmark",
                 "Notes: n per-glyph editor, g global editor",
                 "Editor: Enter newline, Save button commits",
+                "Stroke order: t popup (only when data exists)",
                 "CCAMC: i open glyph page",
                 "Global: ? Help, q Quit",
             ],
@@ -837,10 +945,15 @@ class KanjiGuiWindow(QMainWindow):
         self.sent_group.setStyleSheet(self._focus_style(False))
         self.var_group.setStyleSheet(self._focus_style(var_focus))
 
-        self.menu_label.setText(
+        stroke_available = self.stroke_repo.has_char(detail["ch"])
+        menu_line = (
             "Nav:<-/->/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F"
         )
+        if stroke_available:
+            menu_line += "  Stroke:t"
+        menu_line += "  Help:?  Quit:q"
+        self.menu_label.setText(menu_line)
         self.status_label.setText(self.state.message)
 
         self._sync_overlays(detail)
@@ -900,6 +1013,41 @@ class KanjiGuiWindow(QMainWindow):
         cp = self.state.current_cp
         if cp is not None:
             self.state.message = f"Opened CCAMC for {chr(cp)}"
+        self.refresh_view()
+
+    def _stroke_available_for_current(self) -> bool:
+        cp = self.state.current_cp
+        if cp is None:
+            return False
+        return self.stroke_repo.has_char(chr(cp))
+
+    def _open_stroke_window(self) -> None:
+        cp = self.state.current_cp
+        if cp is None:
+            self.state.message = "No current character"
+            self.refresh_view()
+            return
+        ch = chr(cp)
+        data = self.stroke_repo.load(ch)
+        if data is None:
+            self.state.message = f"No stroke animation data for {ch}"
+            self.refresh_view()
+            return
+        if self._stroke_window is not None:
+            self._stroke_window.close()
+            self._stroke_window = None
+        dlg = StrokeAnimationDialog(data, self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        def _clear_ref() -> None:
+            self._stroke_window = None
+
+        dlg.destroyed.connect(_clear_ref)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        self._stroke_window = dlg
+        self.state.message = f"Stroke animation: {ch}"
         self.refresh_view()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
@@ -987,6 +1135,9 @@ class KanjiGuiWindow(QMainWindow):
             return
         elif text in ("r", "R"):
             self._open_radicals()
+            return
+        elif text in ("t", "T"):
+            self._open_stroke_window()
             return
         elif text == "?":
             self.state.show_help = not self.state.show_help

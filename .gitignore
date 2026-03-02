@@ -8,3 +8,4 @@ data/*.sqlite-shm
 data/*.sqlite-wal
 data/font_profile.json
 data/build_report.json
+StrokeOrder/

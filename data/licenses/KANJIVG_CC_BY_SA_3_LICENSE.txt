@@ -1,0 +1,11 @@
+Stroke-order SVG data used via StrokeOrder is based on KanjiVG.
+
+KanjiVG license:
+Creative Commons Attribution-ShareAlike 3.0 (CC BY-SA 3.0)
+https://creativecommons.org/licenses/by-sa/3.0/
+
+Source references:
+- StrokeOrder: https://github.com/Svampis/StrokeOrder
+- KanjiVG: https://kanjivg.tagaini.net/
+
+Redistribution and derivative use must preserve attribution and share-alike terms.

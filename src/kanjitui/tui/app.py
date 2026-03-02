@@ -9,6 +9,7 @@ from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
+from kanjitui.strokeorder import StrokeOrderData, StrokeOrderRepository, build_tui_stroke_frames
 from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
 from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
 from kanjitui.tui.router import KeyInput, KeyRouter
@@ -88,12 +89,20 @@ class TuiApp:
         self._variant_cache_cp: int | None = None
         self._variant_graph: dict | None = None
         self._variant_targets: list[VariantTarget] = []
+        self.stroke_repo = StrokeOrderRepository()
+        self.stroke_open = False
+        self.stroke_data: StrokeOrderData | None = None
+        self.stroke_frames: list[list[str]] = []
+        self.stroke_frame_idx = 0
+        self.stroke_done = False
+        self.stroke_canvas_dims = (0, 0)
 
         self.router = KeyRouter(self._current_mode, self._handle_normal_key)
         self.router.register("search", self._handle_search_key)
         self.router.register("radical", self._handle_radical_key)
         self.router.register("note", self._handle_note_key)
         self.router.register("bookmark", self._handle_bookmark_key)
+        self.router.register("stroke", self._handle_stroke_key)
 
     @property
     def current_cp(self) -> int | None:
@@ -224,6 +233,76 @@ class TuiApp:
         self.bookmark_open = True
         self.message = f"Bookmarks: {len(self.bookmark_rows)}"
 
+    def _current_stroke_char(self) -> str | None:
+        cp = self.current_cp
+        if cp is None:
+            return None
+        return chr(cp)
+
+    def _stroke_available_for_current(self) -> bool:
+        ch = self._current_stroke_char()
+        if ch is None:
+            return False
+        return self.stroke_repo.has_char(ch)
+
+    def _open_stroke_overlay(self) -> None:
+        ch = self._current_stroke_char()
+        if ch is None:
+            self.message = "No current character"
+            return
+        data = self.stroke_repo.load(ch)
+        if data is None:
+            self.message = f"No stroke animation data for {ch}"
+            return
+        self.stroke_open = True
+        self.stroke_data = data
+        self.stroke_frames = []
+        self.stroke_frame_idx = 0
+        self.stroke_done = False
+        self.stroke_canvas_dims = (0, 0)
+        self.message = f"Stroke animation: {ch}"
+
+    def _stroke_overlay_geometry(self, h: int, w: int) -> tuple[int, int, int, int]:
+        box_w = min(max(36, w - 6), 90)
+        box_h = min(max(12, h - 4), 36)
+        box_w = min(box_w, w - 2)
+        box_h = min(box_h, h - 2)
+        top = max(1, (h - box_h) // 2)
+        left = max(1, (w - box_w) // 2)
+        return top, left, box_h, box_w
+
+    def _ensure_stroke_frames(self, h: int, w: int) -> None:
+        if not self.stroke_open or self.stroke_data is None:
+            return
+        _top, _left, box_h, box_w = self._stroke_overlay_geometry(h, w)
+        cols = max(8, box_w - 4)
+        rows = max(4, box_h - 5)
+        dims = (cols, rows)
+        if dims == self.stroke_canvas_dims and self.stroke_frames:
+            return
+        self.stroke_canvas_dims = dims
+        self.stroke_frames = build_tui_stroke_frames(self.stroke_data, cols=cols, rows=rows)
+        self.stroke_frame_idx = 0
+        self.stroke_done = len(self.stroke_frames) <= 1
+
+    def _tick_stroke_animation(self, stdscr: curses.window) -> None:
+        if not self.stroke_open or self.stroke_data is None or self.stroke_done:
+            return
+        h, w = stdscr.getmaxyx()
+        self._ensure_stroke_frames(h, w)
+        if not self.stroke_frames:
+            self.stroke_done = True
+            return
+        if self.stroke_frame_idx < len(self.stroke_frames) - 1:
+            self.stroke_frame_idx += 1
+        else:
+            self.stroke_done = True
+
+    def _input_timeout_ms(self) -> int:
+        if self.stroke_open and not self.stroke_done:
+            return 28
+        return -1
+
     @staticmethod
     def _line_starts(text: str) -> list[int]:
         starts = [0]
@@ -338,12 +417,19 @@ class TuiApp:
         stdscr.keypad(True)
         while True:
             self._set_cursor_visibility()
+            self._tick_stroke_animation(stdscr)
             self._render(stdscr)
-            key = stdscr.get_wch()
+            stdscr.timeout(self._input_timeout_ms())
+            try:
+                key = stdscr.get_wch()
+            except curses.error:
+                continue
             if not self._handle_key(key):
                 break
 
     def _current_mode(self) -> str:
+        if self.stroke_open:
+            return "stroke"
         if self.search_open:
             return "search"
         if self.radical_open:
@@ -520,6 +606,9 @@ class TuiApp:
         if key == ord("?"):
             self.show_help = not self.show_help
             return True
+        if key in (ord("t"), ord("T")):
+            self._open_stroke_overlay()
+            return True
         if key == ord("/"):
             self.search_open = True
             self.search_input = ""
@@ -535,6 +624,21 @@ class TuiApp:
             self.radical_stroke_idx = 0
             return True
 
+        return True
+
+    def _handle_stroke_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
+        if key == 27:  # Esc
+            self.stroke_open = False
+            self.stroke_data = None
+            self.stroke_frames = []
+            self.stroke_frame_idx = 0
+            self.stroke_done = False
+            self.stroke_canvas_dims = (0, 0)
+            self.message = "Closed stroke animation"
+            return True
         return True
 
     def _handle_search_key(self, key: KeyInput) -> bool | None:
@@ -908,6 +1012,7 @@ class TuiApp:
             f"strokes {detail['strokes'] or '-'}  ({idx}/{total}) order:{order_label}{focus_label}{romaji_label}{filtered_label}"
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
+        stroke_available = self.stroke_repo.has_char(detail["ch"])
 
         self._render_nav_strip(stdscr, 2)
         y = 4
@@ -1003,8 +1108,11 @@ class TuiApp:
 
         menu_line = (
             "Nav:←/→/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F  Help:?  Quit:q"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:N  CCAMC:i  Order:O F"
         )
+        if stroke_available:
+            menu_line += "  Stroke:t"
+        menu_line += "  Help:?  Quit:q"
         self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
         status = self.message
         self._safe_add(stdscr, h - 1, 0, status, curses.A_BOLD)
@@ -1027,6 +1135,8 @@ class TuiApp:
             self._render_search_overlay(stdscr)
         if self.radical_open:
             self._render_radical_overlay(stdscr)
+        if self.stroke_open:
+            self._render_stroke_overlay(stdscr)
 
         stdscr.refresh()
 
@@ -1046,6 +1156,7 @@ class TuiApp:
             "Bookmarks list: x deletes selected bookmark",
             "Notes: n per-glyph editor, g global editor",
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
+            "Stroke order: t popup (only when data exists for current glyph)",
             "CCAMC: i open glyph page",
             "Global: ? Help, q Quit",
             "Data: Unicode Unihan, EDRDG KANJIDIC2/JMdict, CC-CEDICT",
@@ -1359,6 +1470,37 @@ class TuiApp:
                 text += f" [{tag}]"
             row_attr = curses.A_BOLD if idx == self.bookmark_idx else 0
             self._safe_add(stdscr, top + 2 + offset, left + 2, text, row_attr)
+
+    def _render_stroke_overlay(self, stdscr: curses.window) -> None:
+        if self.stroke_data is None:
+            return
+        h, w = stdscr.getmaxyx()
+        top, left, box_h, box_w = self._stroke_overlay_geometry(h, w)
+        self._ensure_stroke_frames(h, w)
+        title = f"Stroke Order: {self.stroke_data.ch} (Esc closes)"
+        self._draw_box(stdscr, top, left, box_h, box_w, title=title)
+        status = "done" if self.stroke_done else "animating"
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            f"{status}  strokes={len(self.stroke_data.strokes)}  source={self.stroke_data.source_path.name}",
+        )
+        frame_idx = max(0, min(self.stroke_frame_idx, max(0, len(self.stroke_frames) - 1)))
+        frame = self.stroke_frames[frame_idx] if self.stroke_frames else []
+        max_rows = max(1, box_h - 5)
+        max_cols = max(1, box_w - 4)
+        for row_idx in range(max_rows):
+            if row_idx >= len(frame):
+                break
+            self._safe_add(stdscr, top + 2 + row_idx, left + 2, frame[row_idx][:max_cols])
+        if self.stroke_frames:
+            self._safe_add(
+                stdscr,
+                top + box_h - 2,
+                left + 2,
+                f"frame {frame_idx + 1}/{len(self.stroke_frames)}",
+            )
 
 def run_tui(
     conn: sqlite3.Connection,

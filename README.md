@@ -96,6 +96,7 @@ make run-gui
 - `x`: in bookmarks list, delete selected bookmark
 - `n`: open per-glyph multiline note editor (prefilled with glyph + codepoint)
 - `g`: open global multiline note editor
+- `t`: open stroke-order animation popup/window (only when stroke data exists for current glyph)
 - Variants panel marker: `▶` means jumpable, `X` means currently filtered out
 - Note editor: `Enter` inserts newline; save via UI `Save` button (GUI) or `Ctrl+S` (TUI)
 - `u`: show user workspace overlay (notes/bookmarks/recent queries)
@@ -141,6 +142,11 @@ To generate `data/raw/sentences.tsv` automatically from Tatoeba exports:
 ```bash
 make build-sentences
 ```
+
+Optional stroke-order integration:
+
+- Clone [StrokeOrder](https://github.com/Svampis/StrokeOrder) in the project root as `StrokeOrder/`, or set `KANJITUI_STROKEORDER_DIR` to that checkout path.
+- App uses SVG files under `StrokeOrder/kanji/` for popup animation in TUI/GUI.
 
 ## Data Layout
 
