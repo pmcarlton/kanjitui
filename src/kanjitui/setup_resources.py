@@ -229,7 +229,7 @@ def _download_cedict(paths: RuntimePaths, log: Callable[[str], None]) -> None:
 def _download_edrdg(paths: RuntimePaths, log: Callable[[str], None], key: str) -> None:
     if key == "kanjidic2":
         urls = [
-            "https://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz",
+            "https://www.edrdg.org/pub/Nihongo/kanjidic2.xml.gz",
         ]
         if ALLOW_FTP_FALLBACK:
             urls.append("ftp://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz")
@@ -237,7 +237,7 @@ def _download_edrdg(paths: RuntimePaths, log: Callable[[str], None], key: str) -
         out_path = paths.data_dir / "kanjidic2.xml"
     else:
         urls = [
-            "https://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz",
+            "https://www.edrdg.org/pub/Nihongo/JMdict_e.gz",
         ]
         if ALLOW_FTP_FALLBACK:
             urls.append("ftp://ftp.edrdg.org/pub/Nihongo/JMdict_e.gz")
@@ -293,11 +293,25 @@ def _download_sentences(paths: RuntimePaths, log: Callable[[str], None]) -> None
 
 
 def _download_strokeorder(paths: RuntimePaths, log: Callable[[str], None]) -> None:
-    url = "https://codeload.github.com/Svampis/StrokeOrder/zip/refs/heads/master"
-    log("Downloading StrokeOrder archive ...")
-    req = urllib.request.Request(url, headers={"User-Agent": "kanjitui/0.1"})
-    with urllib.request.urlopen(req) as resp:
-        content = resp.read()
+    urls = [
+        "https://codeload.github.com/Svampis/StrokeOrder/zip/refs/heads/main",
+        "https://codeload.github.com/Svampis/StrokeOrder/zip/refs/heads/master",
+    ]
+    content = b""
+    last_err: Exception | None = None
+    for attempt, url in enumerate(urls, start=1):
+        try:
+            log(f"Downloading StrokeOrder archive (attempt {attempt}/{len(urls)}) ...")
+            req = urllib.request.Request(url, headers={"User-Agent": "kanjitui/0.1"})
+            with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp:
+                content = resp.read()
+            last_err = None
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            log(f"StrokeOrder download attempt failed: {exc}")
+    if last_err is not None:
+        raise last_err
     with tempfile.TemporaryDirectory(prefix="kanjitui-strokeorder-") as td:
         tmp = Path(td)
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
