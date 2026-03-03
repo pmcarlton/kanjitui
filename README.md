@@ -212,3 +212,4 @@ kanjitui --config path/to/kanjitui.toml
 - Example-word ranking uses heuristics (not corpus frequencies).
 - If font coverage cannot be computed, build can run with no font filter.
 - Component/phonetic series quality depends on available Unihan fields.
+- TUI is limited to the fonts that are installed in the terminal
