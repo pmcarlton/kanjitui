@@ -9,3 +9,4 @@ data/*.sqlite-wal
 data/font_profile.json
 data/build_report.json
 StrokeOrder/
+web/landing/docs/
