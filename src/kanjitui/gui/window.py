@@ -42,6 +42,11 @@ from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.gui.state import GuiState, ORDERINGS
+from kanjitui.related_nav import (
+    build_related_candidates,
+    cn_word_related_cp,
+    jp_word_related_cp,
+)
 from kanjitui.search import normalize as search_normalize
 from kanjitui.setup_resources import (
     SOURCE_ORDER,
@@ -1077,9 +1082,9 @@ class KanjiGuiWindow(QMainWindow):
         self._nav_shortcuts: list[QShortcut] = []
         bindings = [
             (Qt.Key.Key_Right, self._shortcut_move_next),
-            (Qt.Key.Key_Down, self._shortcut_move_next),
             (Qt.Key.Key_Left, self._shortcut_move_prev),
-            (Qt.Key.Key_Up, self._shortcut_move_prev),
+            (Qt.Key.Key_Down, self._shortcut_move_down),
+            (Qt.Key.Key_Up, self._shortcut_move_up),
             (Qt.Key.Key_Home, self._shortcut_move_home),
             (Qt.Key.Key_End, self._shortcut_move_end),
         ]
@@ -1090,21 +1095,25 @@ class KanjiGuiWindow(QMainWindow):
             self._nav_shortcuts.append(shortcut)
 
     def _shortcut_move_next(self) -> None:
-        if self.state.panel_focus == "variants" and self.state.show_variants:
-            moved = self._move_variant_selection(+1)
-            if not moved:
-                self.state.move_next()
-        else:
-            self.state.move_next()
+        self.state.move_next()
         self.refresh_view()
 
     def _shortcut_move_prev(self) -> None:
+        self.state.move_prev()
+        self.refresh_view()
+
+    def _shortcut_move_down(self) -> None:
         if self.state.panel_focus == "variants" and self.state.show_variants:
-            moved = self._move_variant_selection(-1)
-            if not moved:
-                self.state.move_prev()
+            _ = self._move_variant_selection(+1)
         else:
-            self.state.move_prev()
+            _ = self._move_related_selection(+1)
+        self.refresh_view()
+
+    def _shortcut_move_up(self) -> None:
+        if self.state.panel_focus == "variants" and self.state.show_variants:
+            _ = self._move_variant_selection(-1)
+        else:
+            _ = self._move_related_selection(-1)
         self.refresh_view()
 
     def _shortcut_move_home(self) -> None:
@@ -1174,6 +1183,53 @@ class KanjiGuiWindow(QMainWindow):
         self.state.jump_to_cp(selected.cp)
         return True
 
+    def _related_candidates_for_detail(self, detail: dict, include_phonetic: bool) -> list[int]:
+        cp = int(detail["cp"])
+        allowed = set(self.state.ordered_cps)
+        phonetic_rows: list[tuple[int, str, str, str | None, str | None]] = []
+        if include_phonetic:
+            phonetic_rows = db_query.get_phonetic_series(self.state.conn, cp, limit=120)
+        return build_related_candidates(
+            cp,
+            detail["jp_words"],
+            detail["cn_words"],
+            phonetic_rows=phonetic_rows,
+            allowed=allowed,
+        )
+
+    def _selected_related_cp_for_detail(self, detail: dict, include_phonetic: bool) -> int | None:
+        candidates = self._related_candidates_for_detail(detail, include_phonetic=include_phonetic)
+        if not candidates:
+            self.state.related_idx = 0
+            return None
+        self.state.related_idx = max(0, min(self.state.related_idx, len(candidates) - 1))
+        return candidates[self.state.related_idx]
+
+    def _move_related_selection(self, delta: int) -> bool:
+        detail = self._current_detail()
+        if detail is None:
+            return False
+        candidates = self._related_candidates_for_detail(detail, include_phonetic=self.state.show_phonetic)
+        if not candidates:
+            self.state.related_idx = 0
+            self.state.message = "No related glyphs in JP/CN words"
+            return False
+        self.state.related_idx = (self.state.related_idx + delta) % len(candidates)
+        selected = candidates[self.state.related_idx]
+        self.state.message = f"Related: {chr(selected)} U+{selected:04X} ({self.state.related_idx + 1}/{len(candidates)})"
+        return True
+
+    def _jump_to_selected_related(self) -> bool:
+        detail = self._current_detail()
+        if detail is None:
+            return False
+        selected = self._selected_related_cp_for_detail(detail, include_phonetic=self.state.show_phonetic)
+        if selected is None:
+            self.state.message = "No related glyph selected"
+            return False
+        self.state.jump_to_cp(selected)
+        return True
+
     def _format_user_overlay(self, cp: int) -> list[str]:
         if self.state.user_store is None:
             return ["(user store unavailable)"]
@@ -1225,12 +1281,18 @@ class KanjiGuiWindow(QMainWindow):
 
     def _sync_overlays(self, detail: dict) -> None:
         cp = int(detail["cp"])
+        selected_related_cp: int | None = None
+        if "jp_words" in detail and "cn_words" in detail:
+            selected_related_cp = self._selected_related_cp_for_detail(
+                detail,
+                include_phonetic=self.state.show_phonetic,
+            )
         self._sync_overlay(
             "help",
             self.state.show_help,
             "Help",
             [
-                "Navigation: <-/->/j/k, Home/End, Tab panel focus",
+                "Navigation: <-/->/j/k move order; Up/Down select related glyph; Home/End ends",
                 "Ordering: O cycle ordering, F cycle freq profile",
                 "JP panel: m toggles kana/romaji",
                 "Filter: f opens menu; presets can be saved/loaded/deleted",
@@ -1239,7 +1301,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Radicals: r open browser",
                 "Advanced: Shift-R rebuild menu (font-filter optional)",
                 "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
-                "Tab: cycle focus JP/CN/Variants",
+                "Variants panel: Tab focus, Up/Down select variant, Enter jump",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
                 "Workspace: b toggle bookmark, B bookmarks list/jump",
                 "Bookmarks list: x deletes selected bookmark",
@@ -1280,7 +1342,8 @@ class KanjiGuiWindow(QMainWindow):
         ph_lines: list[str] = []
         for idx, (member_cp, member_ch, key, pinyin_marked, pinyin_numbered) in enumerate(ph):
             pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(pinyin_numbered)
-            row = f"{idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
+            marker = "▶" if (selected_related_cp is not None and member_cp == selected_related_cp) else " "
+            row = f"{marker} {idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             if pinyin:
                 row += f"  {pinyin}"
             ph_lines.append(row)
@@ -1382,6 +1445,11 @@ class KanjiGuiWindow(QMainWindow):
 
         self.glyph_label.setText(detail["ch"])
         self.glyph_meta.setText(f"U+{cp:04X}")
+        allowed_cps = set(self.state.ordered_cps)
+        selected_related_cp = self._selected_related_cp_for_detail(
+            detail,
+            include_phonetic=self.state.show_phonetic,
+        )
 
         if self.state.show_jp_romaji:
             on_parts = [search_normalize.kana_to_romaji(reading) for reading in detail["jp_on"]]
@@ -1398,7 +1466,9 @@ class KanjiGuiWindow(QMainWindow):
                 reading = kana or "-"
                 if self.state.show_jp_romaji and kana:
                     reading = search_normalize.kana_to_romaji(kana)
-                jp_lines.append(f"  {rank}. {word}  {reading}  {gloss or '-'}")
+                row_cp = jp_word_related_cp(cp, word, allowed=allowed_cps)
+                marker = "▶" if (row_cp is not None and row_cp == selected_related_cp) else " "
+                jp_lines.append(f"{marker} {rank}. {word}  {reading}  {gloss or '-'}")
         else:
             jp_lines.append("  (no examples found)")
         self.jp_text.setPlainText("\n".join(jp_lines))
@@ -1415,7 +1485,9 @@ class KanjiGuiWindow(QMainWindow):
         if detail["cn_words"]:
             for trad, simp, marked, numbered, gloss, rank in detail["cn_words"][:5]:
                 py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
-                cn_lines.append(f"  {rank}. {trad}/{simp}  {py}  {gloss}")
+                row_cp = cn_word_related_cp(cp, trad, simp, allowed=allowed_cps)
+                marker = "▶" if (row_cp is not None and row_cp == selected_related_cp) else " "
+                cn_lines.append(f"{marker} {rank}. {trad}/{simp}  {py}  {gloss}")
         else:
             cn_lines.append("  (no examples found)")
         self.cn_text.setPlainText("\n".join(cn_lines))
@@ -1473,7 +1545,7 @@ class KanjiGuiWindow(QMainWindow):
 
         stroke_available = self.stroke_repo.has_char(detail["ch"])
         menu_line = (
-            "Nav:<-/->/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
+            "Nav:<-/->/j/k order  Up/Down related  Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
             "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Advanced:R  Ack:A"
         )
         if stroke_available:
@@ -1722,6 +1794,10 @@ class KanjiGuiWindow(QMainWindow):
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.state.panel_focus == "variants" and self.state.show_variants:
                 self._jump_to_selected_variant()
+                self.refresh_view()
+                event.accept()
+                return
+            if self._jump_to_selected_related():
                 self.refresh_view()
                 event.accept()
                 return

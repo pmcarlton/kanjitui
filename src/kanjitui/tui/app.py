@@ -10,6 +10,11 @@ from kanjitui.db import query as db_query
 from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
+from kanjitui.related_nav import (
+    build_related_candidates,
+    cn_word_related_cp,
+    jp_word_related_cp,
+)
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
 from kanjitui.setup_resources import (
@@ -83,6 +88,7 @@ class TuiApp:
         self.show_jp_romaji = False
         self.hide_no_reading = False
         self.variant_idx = 0
+        self.related_idx = 0
 
         self.message = "Ready"
         if self.derived_counts.get("field_provenance", 0) == 0:
@@ -290,6 +296,7 @@ class TuiApp:
     def _jump_to_cp(self, cp: int) -> None:
         if cp in self.ordered_cps:
             self.pos = self.ordered_cps.index(cp)
+            self.related_idx = 0
             self.message = f"Jumped to U+{cp:04X}"
 
     def _open_note_editor(self, target: str) -> None:
@@ -744,6 +751,60 @@ class TuiApp:
         self._jump_to_cp(target.cp)
         return True
 
+    def _related_candidates_for_detail(self, detail: dict, include_phonetic: bool) -> list[int]:
+        allowed = set(self.ordered_cps)
+        phonetic_rows: list[tuple[int, str, str, str | None, str | None]] = []
+        if include_phonetic:
+            phonetic_rows = db_query.get_phonetic_series(self.conn, int(detail["cp"]), limit=120)
+        return build_related_candidates(
+            int(detail["cp"]),
+            detail["jp_words"],
+            detail["cn_words"],
+            phonetic_rows=phonetic_rows,
+            allowed=allowed,
+        )
+
+    def _selected_related_cp(self, detail: dict, include_phonetic: bool) -> int | None:
+        candidates = self._related_candidates_for_detail(detail, include_phonetic=include_phonetic)
+        if not candidates:
+            self.related_idx = 0
+            return None
+        self.related_idx = max(0, min(self.related_idx, len(candidates) - 1))
+        return candidates[self.related_idx]
+
+    def _move_related_selection(self, delta: int) -> bool:
+        cp = self.current_cp
+        if cp is None:
+            return False
+        try:
+            detail = db_query.get_char_detail(self.conn, cp)
+        except Exception:
+            return False
+        candidates = self._related_candidates_for_detail(detail, include_phonetic=self.show_phonetic)
+        if not candidates:
+            self.related_idx = 0
+            self.message = "No related glyphs in JP/CN words"
+            return False
+        self.related_idx = (self.related_idx + delta) % len(candidates)
+        target = candidates[self.related_idx]
+        self.message = f"Related: {chr(target)} U+{target:04X} ({self.related_idx + 1}/{len(candidates)})"
+        return True
+
+    def _jump_to_selected_related(self) -> bool:
+        cp = self.current_cp
+        if cp is None:
+            return False
+        try:
+            detail = db_query.get_char_detail(self.conn, cp)
+        except Exception:
+            return False
+        selected = self._selected_related_cp(detail, include_phonetic=self.show_phonetic)
+        if selected is None:
+            self.message = "No related glyph selected"
+            return False
+        self._jump_to_cp(selected)
+        return True
+
     def run(self, stdscr: curses.window) -> None:
         self._stdscr = stdscr
         stdscr.keypad(True)
@@ -817,22 +878,28 @@ class TuiApp:
         if key in (10, 13, curses.KEY_ENTER):
             if self.panel_focus == "variants" and self.show_variants:
                 self._jump_to_selected_variant()
-                return True
-        if key in (curses.KEY_RIGHT, curses.KEY_DOWN, ord("j")):
-            if self.panel_focus == "variants" and self.show_variants:
-                moved = self._move_variant_selection(+1)
-                if not moved and self.ordered_cps:
-                    self.pos = min(self.pos + 1, len(self.ordered_cps) - 1)
-            elif self.ordered_cps:
+            else:
+                _ = self._jump_to_selected_related()
+            return True
+        if key in (curses.KEY_RIGHT, ord("j")):
+            if self.ordered_cps:
                 self.pos = min(self.pos + 1, len(self.ordered_cps) - 1)
             return True
-        if key in (curses.KEY_LEFT, curses.KEY_UP, ord("k")):
-            if self.panel_focus == "variants" and self.show_variants:
-                moved = self._move_variant_selection(-1)
-                if not moved and self.ordered_cps:
-                    self.pos = max(self.pos - 1, 0)
-            elif self.ordered_cps:
+        if key in (curses.KEY_LEFT, ord("k")):
+            if self.ordered_cps:
                 self.pos = max(self.pos - 1, 0)
+            return True
+        if key in (curses.KEY_DOWN,):
+            if self.panel_focus == "variants" and self.show_variants:
+                _ = self._move_variant_selection(+1)
+            else:
+                _ = self._move_related_selection(+1)
+            return True
+        if key in (curses.KEY_UP,):
+            if self.panel_focus == "variants" and self.show_variants:
+                _ = self._move_variant_selection(-1)
+            else:
+                _ = self._move_related_selection(-1)
             return True
         if key == curses.KEY_HOME:
             if self.panel_focus == "variants" and self.show_variants:
@@ -1663,6 +1730,8 @@ class TuiApp:
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
         stroke_available = self.stroke_repo.has_char(detail["ch"])
+        allowed_cps = set(self.ordered_cps)
+        selected_related_cp = self._selected_related_cp(detail, include_phonetic=self.show_phonetic)
 
         self._render_nav_strip(stdscr, 2)
         y = 4
@@ -1688,7 +1757,9 @@ class TuiApp:
                     reading = kana or "-"
                     if self.show_jp_romaji and kana:
                         reading = search_normalize.kana_to_romaji(kana)
-                    rendered_words.append(f"  {rank}. {word}  {reading}  {gloss or '-'}")
+                    row_cp = jp_word_related_cp(detail["cp"], word, allowed=allowed_cps)
+                    marker = "▶" if (row_cp is not None and row_cp == selected_related_cp) else " "
+                    rendered_words.append(f"{marker} {rank}. {word}  {reading}  {gloss or '-'}")
                 lines.extend(rendered_words)
             jp_focus = self.panel_focus == "jp"
             y = self._render_section(stdscr, y, w, "JP [1]", lines, highlighted=jp_focus) + 1
@@ -1707,12 +1778,11 @@ class TuiApp:
             if not words:
                 lines.append("  (no examples found)")
             else:
-                lines.extend(
-                    [
-                        f"  {rank}. {trad}/{simp}  {(marked or search_normalize.pinyin_numbered_to_marked(numbered or '') or '-')}  {gloss}"
-                        for trad, simp, marked, numbered, gloss, rank in words[:5]
-                    ]
-                )
+                for trad, simp, marked, numbered, gloss, rank in words[:5]:
+                    row_cp = cn_word_related_cp(detail["cp"], trad, simp, allowed=allowed_cps)
+                    marker = "▶" if (row_cp is not None and row_cp == selected_related_cp) else " "
+                    py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
+                    lines.append(f"{marker} {rank}. {trad}/{simp}  {py}  {gloss}")
             cn_focus = self.panel_focus == "cn"
             y = self._render_section(stdscr, y, w, "CN [2]", lines, highlighted=cn_focus) + 1
 
@@ -1741,7 +1811,7 @@ class TuiApp:
 
         if self.show_variants and y < h - 4:
             graph, targets = self._variant_data_for_current()
-            lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}", "Arrows: select  Enter: jump"]
+            lines = [f"nodes={len(graph['nodes'])} edges={len(graph['edges'])}", "Up/Down: select  Enter: jump"]
             if not targets:
                 lines.append("(no variant targets)")
             else:
@@ -1757,7 +1827,7 @@ class TuiApp:
             y = self._render_section(stdscr, y, w, "Variants [4]", lines, highlighted=var_focus)
 
         menu_line = (
-            "Nav:←/→/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
+            "Nav:←/→/j/k order  ↑/↓ related  Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
             "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Advanced:R  Ack:A"
         )
         if stroke_available:
@@ -1774,7 +1844,7 @@ class TuiApp:
         if self.show_components:
             self._render_components_overlay(stdscr, detail["cp"])
         if self.show_phonetic:
-            self._render_phonetic_overlay(stdscr, detail["cp"])
+            self._render_phonetic_overlay(stdscr, detail["cp"], selected_related_cp=selected_related_cp)
         if self.show_user_overlay:
             self._render_user_overlay(stdscr, detail["cp"])
         if self.note_input_open:
@@ -1803,7 +1873,7 @@ class TuiApp:
     def _render_help(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
         lines = [
-            "Navigation: ←/→/j/k, Home/End, Tab panel focus",
+            "Navigation: ←/→/j/k move order, ↑/↓ select related glyph, Home/End jump ends",
             "Ordering: O cycle ordering, F cycle freq profile",
             "JP panel: m toggles kana/romaji",
             "Filter: f opens menu, Space selects, c clear, w save preset, p preset list",
@@ -1811,7 +1881,7 @@ class TuiApp:
             "Search: / open, Enter run/jump, Shift-Up/Down jump top/bottom",
             "Radicals: r open, arrows move, Enter select, [/] stroke filter",
             "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
-            "Variants panel: arrows select variant, Enter jump",
+            "Variants panel: Tab focus then Up/Down select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
             "Workspace: b toggle bookmark, B bookmarks list/jump",
             "Bookmarks list: x deletes selected bookmark",
@@ -2002,7 +2072,12 @@ class TuiApp:
             text = f"{idx + 1}. {comp_ch} U+{comp_cp:04X}"
             self._safe_add(stdscr, top + 2 + idx, left + 2, text)
 
-    def _render_phonetic_overlay(self, stdscr: curses.window, cp: int) -> None:
+    def _render_phonetic_overlay(
+        self,
+        stdscr: curses.window,
+        cp: int,
+        selected_related_cp: int | None = None,
+    ) -> None:
         h, w = stdscr.getmaxyx()
         box_h = min(12, h - 2)
         top = max(1, (h - box_h) // 2)
@@ -2023,7 +2098,8 @@ class TuiApp:
             pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(
                 pinyin_numbered
             )
-            text = f"{idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
+            marker = "▶" if (selected_related_cp is not None and member_cp == selected_related_cp) else " "
+            text = f"{marker} {idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             if pinyin:
                 text += f"  {pinyin}"
             self._safe_add(stdscr, top + 2 + idx, left + 2, text)

@@ -373,6 +373,27 @@ def test_setup_rebuild_progress_does_not_render_while_db_is_closed(tmp_path: Pat
         app.conn.close()
 
 
+def test_up_down_select_related_and_enter_jumps(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        if 0x6F22 in app.ordered_cps:
+            app.pos = app.ordered_cps.index(0x6F22)
+        start_cp = app.current_cp
+        assert start_cp is not None
+
+        assert app._handle_normal_key(curses.KEY_DOWN) is True
+        assert app.current_cp == start_cp
+        assert "Related:" in app.message or "No related glyphs" in app.message
+
+        if "Related:" in app.message:
+            assert app._handle_normal_key(10) is True
+            assert app.current_cp != start_cp
+    finally:
+        conn.close()
+
+
 def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)
