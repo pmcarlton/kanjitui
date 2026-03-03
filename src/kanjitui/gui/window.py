@@ -43,9 +43,8 @@ from kanjitui.db.user import UserStore
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.related_nav import (
-    build_related_rows,
-    cn_word_related_cps,
-    jp_word_related_cps,
+    RelatedRowsLayout,
+    build_related_rows_layout,
 )
 from kanjitui.search import normalize as search_normalize
 from kanjitui.setup_resources import (
@@ -120,15 +119,10 @@ class LiveTextDialog(QDialog):
         self.setStyleSheet("QDialog { border: 2px solid #00a0ff; }")
 
         layout = QVBoxLayout(self)
-        self.hint = QLabel(self)
-        self.hint.setFont(ui_font(self, 12, QFont.Weight.Bold))
-        self.hint.setStyleSheet("color: #006a9c;")
-        layout.addWidget(self.hint)
         self.text = QPlainTextEdit(self)
         self.text.setReadOnly(True)
         self.text.setFont(ui_font(self, 14))
         layout.addWidget(self.text)
-        self._update_hint()
 
     def set_lines(self, lines: list[str]) -> None:
         self.text.setPlainText("\n".join(lines))
@@ -136,17 +130,6 @@ class LiveTextDialog(QDialog):
     def set_close_behavior(self, close_keys: set[str] | None, close_on_any_key: bool) -> None:
         self._close_keys = close_keys or set()
         self._close_on_any_key = close_on_any_key
-        self._update_hint()
-
-    def _update_hint(self) -> None:
-        if self._close_on_any_key:
-            self.hint.setText("Input focus: this overlay window (any key or Esc closes)")
-            return
-        if self._close_keys:
-            keys = ", ".join(sorted(self._close_keys))
-            self.hint.setText(f"Input focus: this overlay window (Esc or {keys} closes)")
-            return
-        self.hint.setText("Input focus: this overlay window (Esc closes)")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._on_close()
@@ -1178,14 +1161,18 @@ class KanjiGuiWindow(QMainWindow):
         self.refresh_view()
 
     def _shortcut_move_down(self) -> None:
-        if self.state.panel_focus == "variants" and self.state.show_variants:
+        if self.state.show_phonetic:
+            _ = self._move_related_selection_vertical(+1)
+        elif self.state.panel_focus == "variants" and self.state.show_variants:
             _ = self._move_variant_selection(+1)
         else:
             _ = self._move_related_selection_vertical(+1)
         self.refresh_view()
 
     def _shortcut_move_up(self) -> None:
-        if self.state.panel_focus == "variants" and self.state.show_variants:
+        if self.state.show_phonetic:
+            _ = self._move_related_selection_vertical(-1)
+        elif self.state.panel_focus == "variants" and self.state.show_variants:
             _ = self._move_variant_selection(-1)
         else:
             _ = self._move_related_selection_vertical(-1)
@@ -1200,7 +1187,12 @@ class KanjiGuiWindow(QMainWindow):
         self.refresh_view()
 
     def _shortcut_move_home(self) -> None:
-        if self.state.panel_focus == "variants" and self.state.show_variants:
+        if self.state.show_phonetic:
+            detail = self._current_detail()
+            rows = self._related_rows_for_detail(detail) if detail is not None else []
+            self.state.related_row_idx = 0 if rows else 0
+            self.state.related_col_idx = 0
+        elif self.state.panel_focus == "variants" and self.state.show_variants:
             cp = self.state.current_cp
             if cp is not None:
                 _graph, targets = self._variant_data_for(cp)
@@ -1210,7 +1202,12 @@ class KanjiGuiWindow(QMainWindow):
         self.refresh_view()
 
     def _shortcut_move_end(self) -> None:
-        if self.state.panel_focus == "variants" and self.state.show_variants:
+        if self.state.show_phonetic:
+            detail = self._current_detail()
+            rows = self._related_rows_for_detail(detail) if detail is not None else []
+            self.state.related_row_idx = len(rows) - 1 if rows else 0
+            self.state.related_col_idx = 0
+        elif self.state.panel_focus == "variants" and self.state.show_variants:
             cp = self.state.current_cp
             if cp is not None:
                 _graph, targets = self._variant_data_for(cp)
@@ -1299,27 +1296,47 @@ class KanjiGuiWindow(QMainWindow):
         self.state.jump_to_cp(selected.cp)
         return True
 
-    def _related_rows_for_detail(self, detail: dict, include_phonetic: bool) -> list[list[int]]:
-        cp = int(detail["cp"])
-        rows = build_related_rows(
-            cp,
-            detail["jp_words"],
-            detail["cn_words"],
-            phonetic_rows=None,
+    def _main_related_layout(self, detail: dict) -> RelatedRowsLayout:
+        return build_related_rows_layout(
+            current_cp=int(detail["cp"]),
+            jp_words=detail["jp_words"],
+            cn_words=detail["cn_words"],
             allowed=None,
         )
-        if include_phonetic:
-            seen = {member for row in rows for member in row}
-            for member_cp, _member_ch, _key, _pinyin_marked, _pinyin_numbered in db_query.get_phonetic_series(
-                self.state.conn, cp, limit=120
-            ):
-                if member_cp == cp or member_cp in seen:
-                    continue
-                seen.add(member_cp)
-                rows.append([member_cp])
+
+    def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
+        rows: list[list[int]] = []
+        seen: set[int] = set()
+        for member_cp, _member_ch, _key, _pinyin_marked, _pinyin_numbered in db_query.get_phonetic_series(
+            self.state.conn, cp, limit=120
+        ):
+            if member_cp == cp or member_cp in seen:
+                continue
+            seen.add(member_cp)
+            rows.append([member_cp])
         return rows
 
-    def _selected_related_cp_for_detail(self, detail: dict, include_phonetic: bool) -> int | None:
+    def _related_rows_for_detail(self, detail: dict, include_phonetic: bool | None = None) -> list[list[int]]:
+        cp = int(detail["cp"])
+        main_rows = [list(row) for row in self._main_related_layout(detail).rows]
+        if include_phonetic is None:
+            if self.state.show_phonetic:
+                return self._phonetic_related_rows(cp)
+            return main_rows
+        if not include_phonetic:
+            return main_rows
+
+        rows = [list(row) for row in main_rows]
+        seen: set[int] = {member for row in rows for member in row}
+        for row in self._phonetic_related_rows(cp):
+            member_cp = row[0]
+            if member_cp in seen:
+                continue
+            seen.add(member_cp)
+            rows.append(row)
+        return rows
+
+    def _selected_related_cp_for_detail(self, detail: dict, include_phonetic: bool | None = None) -> int | None:
         rows = self._related_rows_for_detail(detail, include_phonetic=include_phonetic)
         if not rows:
             self.state.related_row_idx = 0
@@ -1334,11 +1351,11 @@ class KanjiGuiWindow(QMainWindow):
         detail = self._current_detail()
         if detail is None:
             return False
-        rows = self._related_rows_for_detail(detail, include_phonetic=self.state.show_phonetic)
+        rows = self._related_rows_for_detail(detail)
         if not rows:
             self.state.related_row_idx = 0
             self.state.related_col_idx = 0
-            self.state.message = "No related glyphs in JP/CN words"
+            self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN words"
             return False
         self.state.related_row_idx = (self.state.related_row_idx + delta) % len(rows)
         row = rows[self.state.related_row_idx]
@@ -1354,11 +1371,11 @@ class KanjiGuiWindow(QMainWindow):
         detail = self._current_detail()
         if detail is None:
             return False
-        rows = self._related_rows_for_detail(detail, include_phonetic=self.state.show_phonetic)
+        rows = self._related_rows_for_detail(detail)
         if not rows:
             self.state.related_row_idx = 0
             self.state.related_col_idx = 0
-            self.state.message = "No related glyphs in JP/CN words"
+            self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN words"
             return False
         self.state.related_row_idx = max(0, min(self.state.related_row_idx, len(rows) - 1))
         row = rows[self.state.related_row_idx]
@@ -1379,7 +1396,7 @@ class KanjiGuiWindow(QMainWindow):
         detail = self._current_detail()
         if detail is None:
             return False
-        selected = self._selected_related_cp_for_detail(detail, include_phonetic=self.state.show_phonetic)
+        selected = self._selected_related_cp_for_detail(detail)
         if selected is None:
             self.state.message = "No related glyph selected"
             return False
@@ -1449,12 +1466,6 @@ class KanjiGuiWindow(QMainWindow):
 
     def _sync_overlays(self, detail: dict) -> None:
         cp = int(detail["cp"])
-        selected_related_cp: int | None = None
-        if "jp_words" in detail and "cn_words" in detail:
-            selected_related_cp = self._selected_related_cp_for_detail(
-                detail,
-                include_phonetic=self.state.show_phonetic,
-            )
         self._sync_overlay(
             "help",
             self.state.show_help,
@@ -1513,7 +1524,7 @@ class KanjiGuiWindow(QMainWindow):
         ph_lines: list[str] = []
         for idx, (member_cp, member_ch, key, pinyin_marked, pinyin_numbered) in enumerate(ph):
             pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(pinyin_numbered)
-            marker = "▶" if (selected_related_cp is not None and member_cp == selected_related_cp) else " "
+            marker = "▶" if idx == self.state.related_row_idx else " "
             row = f"{marker} {idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             if pinyin:
                 row += f"  {pinyin}"
@@ -1621,10 +1632,11 @@ class KanjiGuiWindow(QMainWindow):
 
         self.glyph_label.setText(detail["ch"])
         self.glyph_meta.setText(f"U+{cp:04X}")
-        selected_related_cp = self._selected_related_cp_for_detail(
-            detail,
-            include_phonetic=self.state.show_phonetic,
-        )
+        main_related_layout = self._main_related_layout(detail)
+        selected_related_cp = self._selected_related_cp_for_detail(detail)
+        active_main_row_idx: int | None = None
+        if not self.state.show_phonetic and main_related_layout.rows:
+            active_main_row_idx = self.state.related_row_idx
 
         if self.state.show_jp_romaji:
             on_parts = [search_normalize.kana_to_romaji(reading) for reading in detail["jp_on"]]
@@ -1637,13 +1649,14 @@ class KanjiGuiWindow(QMainWindow):
         jp_gloss = "; ".join(detail["jp_gloss"][:3]) if detail["jp_gloss"] else "(none)"
         jp_lines = [f"Readings{' (romaji)' if self.state.show_jp_romaji else ''}: on {on} | kun {kun}", f"Gloss: {jp_gloss}", "Words:"]
         if detail["jp_words"]:
-            for word, kana, gloss, rank in detail["jp_words"][:5]:
+            for word_idx, (word, kana, gloss, rank) in enumerate(detail["jp_words"][:5]):
                 reading = kana or "-"
                 if self.state.show_jp_romaji and kana:
                     reading = search_normalize.kana_to_romaji(kana)
-                row_cps = jp_word_related_cps(cp, word, allowed=None)
-                marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
-                display_word = self._mark_selected_glyph(word, selected_related_cp if selected_related_cp in row_cps else None)
+                line_row_idx = main_related_layout.jp_row_indexes[word_idx] if word_idx < len(main_related_layout.jp_row_indexes) else None
+                line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
+                marker = "▶" if line_active else " "
+                display_word = self._mark_selected_glyph(word, selected_related_cp if line_active else None)
                 jp_lines.append(f"{marker} {rank}. {display_word}  {reading}  {gloss or '-'}")
         else:
             jp_lines.append("  (no examples found)")
@@ -1659,12 +1672,13 @@ class KanjiGuiWindow(QMainWindow):
         cn_gloss = "; ".join(detail["cn_gloss"][:3]) if detail["cn_gloss"] else "(none)"
         cn_lines = [f"Readings: {readings}", f"Gloss: {cn_gloss}", "Words:"]
         if detail["cn_words"]:
-            for trad, simp, marked, numbered, gloss, rank in detail["cn_words"][:5]:
+            for word_idx, (trad, simp, marked, numbered, gloss, rank) in enumerate(detail["cn_words"][:5]):
                 py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
-                row_cps = cn_word_related_cps(cp, trad, simp, allowed=None)
-                marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
-                display_trad = self._mark_selected_glyph(trad, selected_related_cp if selected_related_cp in row_cps else None)
-                display_simp = self._mark_selected_glyph(simp, selected_related_cp if selected_related_cp in row_cps else None)
+                line_row_idx = main_related_layout.cn_row_indexes[word_idx] if word_idx < len(main_related_layout.cn_row_indexes) else None
+                line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
+                marker = "▶" if line_active else " "
+                display_trad = self._mark_selected_glyph(trad, selected_related_cp if line_active else None)
+                display_simp = self._mark_selected_glyph(simp, selected_related_cp if line_active else None)
                 cn_lines.append(f"{marker} {rank}. {display_trad}/{display_simp}  {py}  {gloss}")
         else:
             cn_lines.append("  (no examples found)")
@@ -2046,6 +2060,8 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_phonetic = not self.state.show_phonetic
             if self.state.show_phonetic:
                 self.state.show_components = False
+                self.state.related_row_idx = 0
+                self.state.related_col_idx = 0
         elif text in ("u", "U"):
             self.state.show_user_overlay = not self.state.show_user_overlay
         elif text in ("m", "M"):

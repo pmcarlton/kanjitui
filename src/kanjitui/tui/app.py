@@ -11,9 +11,8 @@ from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.related_nav import (
-    build_related_rows,
-    cn_word_related_cps,
-    jp_word_related_cps,
+    RelatedRowsLayout,
+    build_related_rows_layout,
 )
 from kanjitui.search import normalize as search_normalize
 from kanjitui.search.query import SearchEngine
@@ -759,26 +758,47 @@ class TuiApp:
         self._jump_to_cp(target.cp)
         return True
 
-    def _related_rows_for_detail(self, detail: dict, include_phonetic: bool) -> list[list[int]]:
-        rows = build_related_rows(
-            int(detail["cp"]),
-            detail["jp_words"],
-            detail["cn_words"],
-            phonetic_rows=None,
+    def _main_related_layout(self, detail: dict) -> RelatedRowsLayout:
+        return build_related_rows_layout(
+            current_cp=int(detail["cp"]),
+            jp_words=detail["jp_words"],
+            cn_words=detail["cn_words"],
             allowed=None,
         )
-        if include_phonetic:
-            seen = {cp for row in rows for cp in row}
-            for member_cp, _member_ch, _key, _pinyin_marked, _pinyin_numbered in db_query.get_phonetic_series(
-                self.conn, int(detail["cp"]), limit=120
-            ):
-                if member_cp == int(detail["cp"]) or member_cp in seen:
-                    continue
-                seen.add(member_cp)
-                rows.append([member_cp])
+
+    def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
+        rows: list[list[int]] = []
+        seen: set[int] = set()
+        for member_cp, _member_ch, _key, _pinyin_marked, _pinyin_numbered in db_query.get_phonetic_series(
+            self.conn, cp, limit=120
+        ):
+            if member_cp == cp or member_cp in seen:
+                continue
+            seen.add(member_cp)
+            rows.append([member_cp])
         return rows
 
-    def _selected_related_cp(self, detail: dict, include_phonetic: bool) -> int | None:
+    def _related_rows_for_detail(self, detail: dict, include_phonetic: bool | None = None) -> list[list[int]]:
+        cp = int(detail["cp"])
+        main_rows = [list(row) for row in self._main_related_layout(detail).rows]
+        if include_phonetic is None:
+            if self.show_phonetic:
+                return self._phonetic_related_rows(cp)
+            return main_rows
+        if not include_phonetic:
+            return main_rows
+
+        rows = [list(row) for row in main_rows]
+        seen: set[int] = {member for row in rows for member in row}
+        for row in self._phonetic_related_rows(cp):
+            member_cp = row[0]
+            if member_cp in seen:
+                continue
+            seen.add(member_cp)
+            rows.append(row)
+        return rows
+
+    def _selected_related_cp(self, detail: dict, include_phonetic: bool | None = None) -> int | None:
         rows = self._related_rows_for_detail(detail, include_phonetic=include_phonetic)
         if not rows:
             self.related_row_idx = 0
@@ -797,11 +817,11 @@ class TuiApp:
             detail = db_query.get_char_detail(self.conn, cp)
         except Exception:
             return False
-        rows = self._related_rows_for_detail(detail, include_phonetic=self.show_phonetic)
+        rows = self._related_rows_for_detail(detail)
         if not rows:
             self.related_row_idx = 0
             self.related_col_idx = 0
-            self.message = "No related glyphs in JP/CN words"
+            self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN words"
             return False
         self.related_row_idx = (self.related_row_idx + delta) % len(rows)
         row = rows[self.related_row_idx]
@@ -821,11 +841,11 @@ class TuiApp:
             detail = db_query.get_char_detail(self.conn, cp)
         except Exception:
             return False
-        rows = self._related_rows_for_detail(detail, include_phonetic=self.show_phonetic)
+        rows = self._related_rows_for_detail(detail)
         if not rows:
             self.related_row_idx = 0
             self.related_col_idx = 0
-            self.message = "No related glyphs in JP/CN words"
+            self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN words"
             return False
         self.related_row_idx = max(0, min(self.related_row_idx, len(rows) - 1))
         row = rows[self.related_row_idx]
@@ -850,7 +870,7 @@ class TuiApp:
             detail = db_query.get_char_detail(self.conn, cp)
         except Exception:
             return False
-        selected = self._selected_related_cp(detail, include_phonetic=self.show_phonetic)
+        selected = self._selected_related_cp(detail)
         if selected is None:
             self.message = "No related glyph selected"
             return False
@@ -1058,26 +1078,50 @@ class TuiApp:
                 self.pos = max(self.pos - 1, 0)
             return True
         if key in (curses.KEY_DOWN,):
-            if self.panel_focus == "variants" and self.show_variants:
+            if self.show_phonetic:
+                _ = self._move_related_selection_vertical(+1)
+            elif self.panel_focus == "variants" and self.show_variants:
                 _ = self._move_variant_selection(+1)
             else:
                 _ = self._move_related_selection_vertical(+1)
             return True
         if key in (curses.KEY_UP,):
-            if self.panel_focus == "variants" and self.show_variants:
+            if self.show_phonetic:
+                _ = self._move_related_selection_vertical(-1)
+            elif self.panel_focus == "variants" and self.show_variants:
                 _ = self._move_variant_selection(-1)
             else:
                 _ = self._move_related_selection_vertical(-1)
             return True
         if key == curses.KEY_HOME:
-            if self.panel_focus == "variants" and self.show_variants:
+            if self.show_phonetic:
+                detail = None
+                if self.current_cp is not None:
+                    try:
+                        detail = db_query.get_char_detail(self.conn, self.current_cp)
+                    except Exception:
+                        detail = None
+                rows = self._related_rows_for_detail(detail) if detail is not None else []
+                self.related_row_idx = 0 if rows else 0
+                self.related_col_idx = 0
+            elif self.panel_focus == "variants" and self.show_variants:
                 _graph, targets = self._variant_data_for_current()
                 self.variant_idx = 0 if targets else 0
             else:
                 self.pos = 0
             return True
         if key == curses.KEY_END:
-            if self.panel_focus == "variants" and self.show_variants:
+            if self.show_phonetic:
+                detail = None
+                if self.current_cp is not None:
+                    try:
+                        detail = db_query.get_char_detail(self.conn, self.current_cp)
+                    except Exception:
+                        detail = None
+                rows = self._related_rows_for_detail(detail) if detail is not None else []
+                self.related_row_idx = len(rows) - 1 if rows else 0
+                self.related_col_idx = 0
+            elif self.panel_focus == "variants" and self.show_variants:
                 _graph, targets = self._variant_data_for_current()
                 self.variant_idx = len(targets) - 1 if targets else 0
             elif self.ordered_cps:
@@ -1141,6 +1185,8 @@ class TuiApp:
             self.show_phonetic = not self.show_phonetic
             if self.show_phonetic:
                 self.show_components = False
+                self.related_row_idx = 0
+                self.related_col_idx = 0
             return True
         if key in (ord("m"), ord("M")):
             self.show_jp_romaji = not self.show_jp_romaji
@@ -1911,7 +1957,11 @@ class TuiApp:
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
         stroke_available = self.stroke_repo.has_char(detail["ch"])
-        selected_related_cp = self._selected_related_cp(detail, include_phonetic=self.show_phonetic)
+        main_related_layout = self._main_related_layout(detail)
+        selected_related_cp = self._selected_related_cp(detail)
+        active_main_row_idx: int | None = None
+        if not self.show_phonetic and main_related_layout.rows:
+            active_main_row_idx = self.related_row_idx
 
         self._render_nav_strip(stdscr, 2)
         y = 4
@@ -1933,13 +1983,14 @@ class TuiApp:
                 lines.append("  (no examples found)")
             else:
                 rendered_words = []
-                for word, kana, gloss, rank in words[:5]:
+                for word_idx, (word, kana, gloss, rank) in enumerate(words[:5]):
                     reading = kana or "-"
                     if self.show_jp_romaji and kana:
                         reading = search_normalize.kana_to_romaji(kana)
-                    row_cps = jp_word_related_cps(detail["cp"], word, allowed=None)
-                    marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
-                    display_word = self._mark_selected_glyph(word, selected_related_cp if selected_related_cp in row_cps else None)
+                    line_row_idx = main_related_layout.jp_row_indexes[word_idx] if word_idx < len(main_related_layout.jp_row_indexes) else None
+                    line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
+                    marker = "▶" if line_active else " "
+                    display_word = self._mark_selected_glyph(word, selected_related_cp if line_active else None)
                     rendered_words.append(f"{marker} {rank}. {display_word}  {reading}  {gloss or '-'}")
                 lines.extend(rendered_words)
             jp_focus = self.panel_focus == "jp"
@@ -1959,12 +2010,13 @@ class TuiApp:
             if not words:
                 lines.append("  (no examples found)")
             else:
-                for trad, simp, marked, numbered, gloss, rank in words[:5]:
-                    row_cps = cn_word_related_cps(detail["cp"], trad, simp, allowed=None)
-                    marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
+                for word_idx, (trad, simp, marked, numbered, gloss, rank) in enumerate(words[:5]):
+                    line_row_idx = main_related_layout.cn_row_indexes[word_idx] if word_idx < len(main_related_layout.cn_row_indexes) else None
+                    line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
+                    marker = "▶" if line_active else " "
                     py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
-                    display_trad = self._mark_selected_glyph(trad, selected_related_cp if selected_related_cp in row_cps else None)
-                    display_simp = self._mark_selected_glyph(simp, selected_related_cp if selected_related_cp in row_cps else None)
+                    display_trad = self._mark_selected_glyph(trad, selected_related_cp if line_active else None)
+                    display_simp = self._mark_selected_glyph(simp, selected_related_cp if line_active else None)
                     lines.append(f"{marker} {rank}. {display_trad}/{display_simp}  {py}  {gloss}")
             cn_focus = self.panel_focus == "cn"
             y = self._render_section(stdscr, y, w, "CN [2]", lines, highlighted=cn_focus) + 1
@@ -2028,7 +2080,7 @@ class TuiApp:
         if self.show_components:
             self._render_components_overlay(stdscr, detail["cp"])
         if self.show_phonetic:
-            self._render_phonetic_overlay(stdscr, detail["cp"], selected_related_cp=selected_related_cp)
+            self._render_phonetic_overlay(stdscr, detail["cp"])
         if self.show_user_overlay:
             self._render_user_overlay(stdscr, detail["cp"])
         if self.note_input_open:
@@ -2259,7 +2311,6 @@ class TuiApp:
         self,
         stdscr: curses.window,
         cp: int,
-        selected_related_cp: int | None = None,
     ) -> None:
         h, w = stdscr.getmaxyx()
         box_h = min(12, h - 2)
@@ -2281,7 +2332,7 @@ class TuiApp:
             pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(
                 pinyin_numbered
             )
-            marker = "▶" if (selected_related_cp is not None and member_cp == selected_related_cp) else " "
+            marker = "▶" if idx == self.related_row_idx else " "
             text = f"{marker} {idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             if pinyin:
                 text += f"  {pinyin}"
