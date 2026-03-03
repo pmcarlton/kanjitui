@@ -1426,6 +1426,10 @@ class KanjiGuiWindow(QMainWindow):
             _ = self._move_related_selection_vertical(+1)
             self.refresh_view()
             return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            _ = self._jump_to_selected_related()
+            self.refresh_view()
+            return True
         if key == Qt.Key.Key_Home:
             detail = self._current_detail()
             rows = self._related_rows_for_detail(detail) if detail is not None else []
