@@ -22,6 +22,7 @@ DOWNLOAD_TIMEOUT_SECONDS = int(os.environ.get("KANJITUI_DOWNLOAD_TIMEOUT", "45")
 DOWNLOAD_CHUNK_BYTES = 256 * 1024
 LOG_EVERY_BYTES = 8 * 1024 * 1024
 ALLOW_FTP_FALLBACK = os.environ.get("KANJITUI_ALLOW_FTP", "").strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_BUILD_FONT = "Noto Sans Mono CJK"
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,10 @@ def resolve_runtime_paths(user_store: UserStore | None) -> RuntimePaths:
         strokeorder_dir=strokeorder_dir,
         tatoeba_dir=data_dir / "tatoeba",
     )
+
+
+def default_build_font() -> str:
+    return os.environ.get("KANJITUI_FONT", DEFAULT_BUILD_FONT).strip() or DEFAULT_BUILD_FONT
 
 
 def _path_exists(path: Path) -> bool:
@@ -384,6 +389,7 @@ def rebuild_database_from_sources(
     paths: RuntimePaths,
     db_path: Path,
     progress: Callable[[str], None] | None = None,
+    font: str | None = None,
 ) -> dict[str, int]:
     presence = detect_available_sources(paths)
     providers = build_enabled_providers(presence)
@@ -396,7 +402,7 @@ def rebuild_database_from_sources(
         BuildConfig(
             db_path=db_path,
             paths=default_build_paths(paths.data_dir),
-            font=None,
+            font=font,
             enabled_providers=providers,
         ),
         progress=progress,

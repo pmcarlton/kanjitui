@@ -47,6 +47,7 @@ from kanjitui.setup_resources import (
     SOURCE_ORDER,
     SOURCES,
     acknowledgements_for_sources,
+    default_build_font,
     default_setup_selection,
     detect_available_sources,
     download_selected_sources,
@@ -336,6 +337,13 @@ class SetupDialog(QDialog):
             row_idx += 1
         layout.addLayout(source_grid)
 
+        self.font_filter_cb = QCheckBox(
+            f"Auto-build using font filter ({default_build_font()})",
+            self,
+        )
+        self.font_filter_cb.setChecked(False)
+        layout.addWidget(self.font_filter_cb)
+
         self.log = QPlainTextEdit(self)
         self.log.setReadOnly(True)
         self.log.setFont(ui_font(self, 12))
@@ -383,10 +391,79 @@ class SetupDialog(QDialog):
         ok = sum(1 for status in results.values() if status == "ok")
         fail = sum(1 for status in results.values() if status != "ok")
         self._append(f"Completed: ok={ok} failed={fail}")
-        self.window._after_setup_download(results, progress=_progress)
+        setup_font = default_build_font() if self.font_filter_cb.isChecked() else None
+        self.window._after_setup_download(results, progress=_progress, font=setup_font)
         self.progress.setValue(total_steps)
         self._append(self.window.state.message)
         self.download_btn.setEnabled(True)
+
+
+class AdvancedRebuildDialog(QDialog):
+    def __init__(self, window: "KanjiGuiWindow", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.window = window
+        self.setWindowTitle("Advanced Rebuild")
+        self.resize(860, 560)
+
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "Rebuild DB from currently-downloaded sources. Use a font filter to keep only supported glyphs.",
+            self,
+        )
+        hint.setWordWrap(True)
+        hint.setFont(ui_font(self, 12))
+        layout.addWidget(hint)
+
+        self.use_font_filter = QCheckBox("Use font filter", self)
+        self.use_font_filter.setChecked(True)
+        layout.addWidget(self.use_font_filter)
+
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("Font:", self))
+        self.font_input = QLineEdit(default_build_font(), self)
+        self.font_input.setFont(ui_font(self, 12))
+        font_row.addWidget(self.font_input, 1)
+        layout.addLayout(font_row)
+
+        self.log = QPlainTextEdit(self)
+        self.log.setReadOnly(True)
+        self.log.setFont(ui_font(self, 12))
+        layout.addWidget(self.log, 1)
+
+        self.progress = QProgressBar(self)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+
+        row = QHBoxLayout()
+        self.rebuild_btn = QPushButton("Rebuild", self)
+        self.close_btn = QPushButton("Close", self)
+        row.addWidget(self.rebuild_btn)
+        row.addWidget(self.close_btn)
+        layout.addLayout(row)
+
+        self.rebuild_btn.clicked.connect(self._run_rebuild)
+        self.close_btn.clicked.connect(self.accept)
+
+    def _append(self, text: str) -> None:
+        self.log.appendPlainText(text)
+        self.log.ensureCursorVisible()
+        QApplication.processEvents()
+
+    def _run_rebuild(self) -> None:
+        self.rebuild_btn.setEnabled(False)
+        self.progress.setRange(0, 0)
+        use_filter = self.use_font_filter.isChecked()
+        font_spec = self.font_input.text().strip() or default_build_font()
+        ok = self.window._run_advanced_rebuild(
+            use_font_filter=use_filter,
+            font_spec=font_spec,
+            progress=self._append,
+        )
+        self.progress.setRange(0, 1)
+        self.progress.setValue(1 if ok else 0)
+        self._append(self.window.state.message)
+        self.rebuild_btn.setEnabled(True)
 
 
 class FilterDialog(QDialog):
@@ -1160,6 +1237,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Quick filter: Shift-N toggles hide-no-reading",
                 "Search: / open, Enter run/jump, Up/Down select",
                 "Radicals: r open browser",
+                "Advanced: Shift-R rebuild menu (font-filter optional)",
                 "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
                 "Tab: cycle focus JP/CN/Variants",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
@@ -1235,6 +1313,7 @@ class KanjiGuiWindow(QMainWindow):
             "Welcome to kanjigui.",
             "Press any key to dismiss this page.",
             "Shift-S opens setup/download menu.",
+            "Shift-R opens advanced rebuild menu.",
             "Shift-A reopens acknowledgements.",
             "",
         ] + self._ack_lines()
@@ -1252,10 +1331,10 @@ class KanjiGuiWindow(QMainWindow):
             total_chars = len(self.state.filter_data.all_cps)
             if total_chars > 0:
                 self.header_label.setText("No characters match current filters.")
-                self.menu_label.setText("Filter:f  Quick:N  Setup:S  Ack:A  Help:?  Quit:q")
+                self.menu_label.setText("Filter:f  Quick:N  Setup:S  Advanced:R  Ack:A  Help:?  Quit:q")
             else:
                 self.header_label.setText("No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
-                self.menu_label.setText("Setup:S  Filter:f  Ack:A  Help:?  Quit:q")
+                self.menu_label.setText("Setup:S  Advanced:R  Filter:f  Ack:A  Help:?  Quit:q")
             self.nav_strip.setText("")
             self.glyph_label.setText("?")
             self.glyph_meta.setText("")
@@ -1395,7 +1474,7 @@ class KanjiGuiWindow(QMainWindow):
         stroke_available = self.stroke_repo.has_char(detail["ch"])
         menu_line = (
             "Nav:<-/->/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Ack:A"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Advanced:R  Ack:A"
         )
         if stroke_available:
             menu_line += "  Stroke:t"
@@ -1479,6 +1558,7 @@ class KanjiGuiWindow(QMainWindow):
         self,
         results: dict[str, str],
         progress: Callable[[str], None] | None = None,
+        font: str | None = None,
     ) -> None:
         ok = sum(1 for status in results.values() if status == "ok")
         fail = sum(1 for status in results.values() if status != "ok")
@@ -1492,6 +1572,8 @@ class KanjiGuiWindow(QMainWindow):
         current_cp = self.state.current_cp
         auto_build_ok = False
         try:
+            if font and progress is not None:
+                progress(f"Using font filter for setup auto-build: {font}")
             if progress is not None:
                 progress("Starting automatic DB rebuild ...")
             try:
@@ -1502,6 +1584,7 @@ class KanjiGuiWindow(QMainWindow):
                 paths=self.runtime_paths,
                 db_path=db_path,
                 progress=progress,
+                font=font,
             )
             auto_build_ok = True
         except Exception as exc:  # noqa: BLE001
@@ -1510,8 +1593,57 @@ class KanjiGuiWindow(QMainWindow):
             self.state.conn = connect_db(db_path)
             self.state.reload_db_state(current_cp=current_cp)
         if auto_build_ok:
-            self.state.message = f"Setup download + auto-build completed: ok={ok} failed={fail}"
+            mode = " + font-filter build" if font else ""
+            self.state.message = f"Setup download + auto-build{mode} completed: ok={ok} failed={fail}"
         self.refresh_view()
+
+    def _run_advanced_rebuild(
+        self,
+        *,
+        use_font_filter: bool,
+        font_spec: str,
+        progress: Callable[[str], None] | None = None,
+    ) -> bool:
+        db_path = self._current_db_path()
+        if db_path is None:
+            self.state.message = "Advanced rebuild skipped (no DB path)."
+            self.refresh_view()
+            return False
+
+        font = None
+        if use_font_filter:
+            font = font_spec.strip() or default_build_font()
+            if progress is not None:
+                progress(f"Rebuild font filter enabled: {font}")
+        elif progress is not None:
+            progress("Rebuild font filter disabled")
+
+        current_cp = self.state.current_cp
+        ok = False
+        try:
+            if progress is not None:
+                progress("Starting advanced DB rebuild ...")
+            try:
+                self.state.conn.close()
+            except Exception:
+                pass
+            _ = rebuild_database_from_sources(
+                paths=self.runtime_paths,
+                db_path=db_path,
+                progress=progress,
+                font=font,
+            )
+            ok = True
+            self.state.message = "Advanced rebuild complete"
+        except Exception as exc:  # noqa: BLE001
+            if progress is not None:
+                progress(f"Advanced rebuild failed: {exc}")
+            self.state.message = f"Advanced rebuild failed: {exc}"
+        finally:
+            self.state.conn = connect_db(db_path)
+            self.state.reload_db_state(current_cp=current_cp)
+        self.refresh_view()
+        return ok
 
     def _current_db_path(self) -> Path | None:
         row = self.state.conn.execute("PRAGMA database_list").fetchone()
@@ -1525,6 +1657,11 @@ class KanjiGuiWindow(QMainWindow):
     def _open_setup_dialog(self) -> None:
         self._dismiss_startup_overlay()
         dlg = SetupDialog(self, self)
+        dlg.exec()
+        self.refresh_view()
+
+    def _open_advanced_dialog(self) -> None:
+        dlg = AdvancedRebuildDialog(self, self)
         dlg.exec()
         self.refresh_view()
 
@@ -1658,8 +1795,11 @@ class KanjiGuiWindow(QMainWindow):
         elif text == "/":
             self._open_search()
             return
-        elif text in ("r", "R"):
+        elif text == "r":
             self._open_radicals()
+            return
+        elif text == "R":
+            self._open_advanced_dialog()
             return
         elif text == "S":
             self._open_setup_dialog()

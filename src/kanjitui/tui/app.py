@@ -16,6 +16,7 @@ from kanjitui.setup_resources import (
     SOURCE_ORDER,
     SOURCES,
     acknowledgements_for_sources,
+    default_build_font,
     default_setup_selection,
     detect_available_sources,
     download_selected_sources,
@@ -130,8 +131,16 @@ class TuiApp:
         self.setup_rows = [key for key in SOURCE_ORDER if key in SOURCES]
         self.setup_selected: set[str] = set()
         self.setup_idx = 0
+        self.setup_font_filter = False
         self.setup_logs: list[str] = []
         self._setup_results: dict[str, str] = {}
+        self.advanced_open = False
+        self.advanced_idx = 0
+        self.advanced_use_font_filter = True
+        self.advanced_font_spec = default_build_font()
+        self.advanced_font_input_open = False
+        self.advanced_font_input = ""
+        self.advanced_logs: list[str] = []
         self.filter_open = False
         self.filter_options: list[tuple[str, str, str, str]] = []
         self.filter_idx = 0
@@ -153,6 +162,7 @@ class TuiApp:
         self.router.register("bookmark", self._handle_bookmark_key)
         self.router.register("stroke", self._handle_stroke_key)
         self.router.register("setup", self._handle_setup_key)
+        self.router.register("advanced", self._handle_advanced_key)
         self.router.register("ack", self._handle_ack_key)
         self.router.register("filter", self._handle_filter_key)
 
@@ -351,10 +361,20 @@ class TuiApp:
         available = self._available_sources()
         self.setup_selected = set(default_setup_selection(available))
         self.setup_idx = 0
+        self.setup_font_filter = False
         self.setup_logs = []
         self._setup_results = {}
         self.setup_open = True
         self.message = "Setup: select sources to download"
+
+    def _open_advanced_overlay(self) -> None:
+        self.advanced_open = True
+        self.advanced_idx = 0
+        self.advanced_font_input_open = False
+        self.advanced_logs = []
+        if not self.advanced_font_spec.strip():
+            self.advanced_font_spec = default_build_font()
+        self.message = "Advanced: rebuild options"
 
     def _refresh_filter_options(self) -> None:
         specs = filter_group_specs(self.freq_profiles)
@@ -459,33 +479,51 @@ class TuiApp:
         fail = sum(1 for status in self._setup_results.values() if status != "ok")
         self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
         auto_build_ok = False
-        db_path = self._current_db_path()
-        if db_path is None:
-            self.setup_logs.append("Skipping auto-build: no filesystem DB path is attached.")
-        else:
-            current_cp = self.current_cp
-            self.setup_logs.append("Starting automatic DB rebuild ...")
-            try:
-                try:
-                    self.conn.close()
-                except Exception:
-                    pass
-                _ = rebuild_database_from_sources(
-                    paths=self.runtime_paths,
-                    db_path=db_path,
-                    progress=_progress,
-                )
-                auto_build_ok = True
-            except Exception as exc:  # noqa: BLE001
-                self.setup_logs.append(f"Automatic DB rebuild failed: {exc}")
-            finally:
-                self.conn = connect_db(db_path)
-                self._reload_db_state(current_cp=current_cp)
+        setup_font = default_build_font() if self.setup_font_filter else None
+        if setup_font:
+            self.setup_logs.append(f"Using font filter for setup auto-build: {setup_font}")
+        auto_build_ok = self._run_auto_rebuild(
+            font=setup_font,
+            progress=_progress,
+            logs=self.setup_logs,
+        )
         self.setup_logs.append(f"Completed: ok={ok} failed={fail}")
         if auto_build_ok:
             self.message = f"Setup download + auto-build completed: ok={ok} failed={fail}"
         else:
             self.message = f"Setup download completed: ok={ok} failed={fail}"
+
+    def _run_auto_rebuild(
+        self,
+        *,
+        font: str | None,
+        progress: Callable[[str], None] | None,
+        logs: list[str],
+    ) -> bool:
+        db_path = self._current_db_path()
+        if db_path is None:
+            logs.append("Skipping rebuild: no filesystem DB path is attached.")
+            return False
+        current_cp = self.current_cp
+        logs.append("Starting automatic DB rebuild ...")
+        try:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            _ = rebuild_database_from_sources(
+                paths=self.runtime_paths,
+                db_path=db_path,
+                progress=progress,
+                font=font,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logs.append(f"Automatic DB rebuild failed: {exc}")
+            return False
+        finally:
+            self.conn = connect_db(db_path)
+            self._reload_db_state(current_cp=current_cp)
 
     def _current_db_path(self) -> Path | None:
         row = self.conn.execute("PRAGMA database_list").fetchone()
@@ -723,6 +761,8 @@ class TuiApp:
             return "ack"
         if self.setup_open:
             return "setup"
+        if self.advanced_open:
+            return "advanced"
         if self.filter_open:
             return "filter"
         if self.stroke_open:
@@ -741,7 +781,12 @@ class TuiApp:
         return self.router.dispatch(key)
 
     def _set_cursor_visibility(self) -> None:
-        target = 1 if (self.search_open or self.note_input_open or self.filter_name_input_open) else 0
+        target = 1 if (
+            self.search_open
+            or self.note_input_open
+            or self.filter_name_input_open
+            or self.advanced_font_input_open
+        ) else 0
         try:
             curses.curs_set(target)
         except curses.error:
@@ -922,13 +967,16 @@ class TuiApp:
             self.search_results = []
             self.search_idx = 0
             return True
-        if key in (ord("r"), ord("R")):
+        if key in (ord("r"),):
             self.radical_open = True
             self.radical_results = None
             self.radical_result_idx = 0
             self.radical_selected = None
             self.radical_stroke_options = [None]
             self.radical_stroke_idx = 0
+            return True
+        if key in (ord("R"),):
+            self._open_advanced_overlay()
             return True
 
         return True
@@ -966,30 +1014,38 @@ class TuiApp:
             self.setup_open = False
             self.message = "Closed setup"
             return True
+        max_idx = len(self.setup_rows)
         if key in (curses.KEY_UP, ord("k")):
             self.setup_idx = max(0, self.setup_idx - 1)
             return True
         if key in (curses.KEY_DOWN, ord("j")):
-            self.setup_idx = min(len(self.setup_rows) - 1, self.setup_idx + 1)
+            self.setup_idx = min(max_idx, self.setup_idx + 1)
             return True
         if key == ord(" "):
-            if self.setup_rows:
+            if self.setup_idx < len(self.setup_rows):
                 source = self.setup_rows[self.setup_idx]
                 if source in self.setup_selected:
                     self.setup_selected.discard(source)
                 else:
                     self.setup_selected.add(source)
+            else:
+                self.setup_font_filter = not self.setup_font_filter
             return True
         if key in (10, 13, curses.KEY_ENTER):
-            if self.setup_rows:
+            if self.setup_idx < len(self.setup_rows):
                 source = self.setup_rows[self.setup_idx]
                 if source in self.setup_selected:
                     self.setup_selected.discard(source)
                 else:
                     self.setup_selected.add(source)
+            else:
+                self.setup_font_filter = not self.setup_font_filter
             return True
         if key in (ord("d"), ord("D")):
             self._run_setup_download()
+            return True
+        if key in (ord("f"), ord("F")):
+            self.setup_font_filter = not self.setup_font_filter
             return True
         if key in (ord("a"),):
             self.setup_selected = set(self.setup_rows)
@@ -1005,6 +1061,90 @@ class TuiApp:
                     self.setup_selected.discard(source)
                 else:
                     self.setup_selected.add(source)
+            return True
+        return True
+
+    def _run_advanced_rebuild(self) -> None:
+        if self.advanced_use_font_filter:
+            font = self.advanced_font_spec.strip() or default_build_font()
+            self.advanced_font_spec = font
+            self.advanced_logs.append(f"Rebuild font filter enabled: {font}")
+        else:
+            font = None
+            self.advanced_logs.append("Rebuild font filter disabled")
+
+        def _progress(msg: str) -> None:
+            self.advanced_logs.append(msg)
+            if len(self.advanced_logs) > 140:
+                self.advanced_logs = self.advanced_logs[-140:]
+            if self._stdscr is not None:
+                try:
+                    self._render(self._stdscr)
+                except curses.error:
+                    pass
+
+        ok = self._run_auto_rebuild(font=font, progress=_progress, logs=self.advanced_logs)
+        self.message = "Advanced rebuild complete" if ok else "Advanced rebuild failed"
+
+    def _handle_advanced_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if self.advanced_font_input_open:
+            if key == 27:
+                self.advanced_font_input_open = False
+                self.advanced_font_input = ""
+                self.message = "Cancelled font edit"
+                return True
+            if key in (10, 13, curses.KEY_ENTER):
+                value = self.advanced_font_input.strip()
+                if value:
+                    self.advanced_font_spec = value
+                    self.message = f"Advanced font: {value}"
+                self.advanced_font_input_open = False
+                self.advanced_font_input = ""
+                return True
+            if key in (curses.KEY_BACKSPACE, 127):
+                if self.advanced_font_input:
+                    self.advanced_font_input = self.advanced_font_input[:-1]
+                return True
+            if isinstance(key, str):
+                if len(key) == 1 and key.isprintable():
+                    self.advanced_font_input += key
+                return True
+            if isinstance(key, int) and 32 <= key <= 126:
+                self.advanced_font_input += chr(key)
+                return True
+            return True
+
+        if isinstance(key, str):
+            return True
+        if key in (27, ord("R"), ord("r")):
+            self.advanced_open = False
+            self.message = "Closed advanced menu"
+            return True
+        if key in (curses.KEY_UP, ord("k")):
+            self.advanced_idx = max(0, self.advanced_idx - 1)
+            return True
+        if key in (curses.KEY_DOWN, ord("j")):
+            self.advanced_idx = min(2, self.advanced_idx + 1)
+            return True
+        if key in (ord("f"), ord("F")):
+            self.advanced_use_font_filter = not self.advanced_use_font_filter
+            return True
+        if key in (ord("e"), ord("E")):
+            self.advanced_font_input_open = True
+            self.advanced_font_input = self.advanced_font_spec
+            return True
+        if key in (ord("d"), ord("D"), ord("x"), ord("X")):
+            self._run_advanced_rebuild()
+            return True
+        if key in (ord(" "), 10, 13, curses.KEY_ENTER):
+            if self.advanced_idx == 0:
+                self.advanced_use_font_filter = not self.advanced_use_font_filter
+            elif self.advanced_idx == 1:
+                self.advanced_font_input_open = True
+                self.advanced_font_input = self.advanced_font_spec
+            else:
+                self._run_advanced_rebuild()
             return True
         return True
 
@@ -1468,11 +1608,11 @@ class TuiApp:
             total_chars = len(self.filter_data.all_cps)
             if total_chars > 0:
                 self._safe_add(stdscr, 0, 0, "No characters match current filters.")
-                menu_line = "Filter:f (c clears)  Quick filter:N  Ack:A  Help:?  Quit:q"
+                menu_line = "Filter:f (c clears)  Quick filter:N  Setup:S  Advanced:R  Ack:A  Help:?  Quit:q"
             else:
                 self._safe_add(stdscr, 0, 0, "No characters in DB yet. Use Setup (Shift-S) to fetch sources.")
                 menu_line = (
-                    "Setup:S  Filter:f  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
+                    "Setup:S  Advanced:R  Filter:f  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
                     f"{self.runtime_paths.data_dir})"
                 )
             self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
@@ -1481,6 +1621,8 @@ class TuiApp:
                 self._render_help(stdscr)
             if self.setup_open:
                 self._render_setup_overlay(stdscr)
+            if self.advanced_open:
+                self._render_advanced_overlay(stdscr)
             if self.filter_open:
                 self._render_filter_overlay(stdscr)
             if self.show_ack_overlay:
@@ -1613,7 +1755,7 @@ class TuiApp:
 
         menu_line = (
             "Nav:←/→/j/k Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
-            "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Ack:A"
+            "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Advanced:R  Ack:A"
         )
         if stroke_available:
             menu_line += "  Stroke:t"
@@ -1644,6 +1786,8 @@ class TuiApp:
             self._render_stroke_overlay(stdscr)
         if self.setup_open:
             self._render_setup_overlay(stdscr)
+        if self.advanced_open:
+            self._render_advanced_overlay(stdscr)
         if self.filter_open:
             self._render_filter_overlay(stdscr)
         if self.show_ack_overlay:
@@ -1672,6 +1816,7 @@ class TuiApp:
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
             "Stroke order: t popup (only when data exists for current glyph)",
             "Setup: Shift-S opens source setup/download menu",
+            "Advanced: Shift-R opens rebuild menu (font-filter optional)",
             "Acknowledgements: Shift-A overlay",
             "CCAMC: i open glyph page",
             "Global: ? Help, q Quit",
@@ -2064,7 +2209,7 @@ class TuiApp:
 
     def _render_setup_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
-        box_h = min(22, h - 2)
+        box_h = min(24, h - 2)
         box_w = min(132, w - 2)
         top = max(1, (h - box_h) // 2)
         left = max(1, (w - box_w) // 2)
@@ -2073,13 +2218,13 @@ class TuiApp:
             stdscr,
             top + 1,
             left + 2,
-            "Up/Down: move  Space/Enter/1-9: toggle  d: download  a: all  n: none  Esc: close",
+            "Up/Down: move  Space/Enter/1-9: toggle  f: font-filter  d: download  a: all  n: none  Esc: close",
             curses.A_BOLD,
         )
         self._safe_add(stdscr, top + 2, left + 2, "Source", curses.A_BOLD)
         self._safe_add(stdscr, top + 2, left + 58, "License / Terms URL", curses.A_BOLD)
         available = self._available_sources()
-        max_rows = min(8, box_h - 9)
+        max_rows = min(8, box_h - 11)
         for row in range(max_rows):
             if row >= len(self.setup_rows):
                 break
@@ -2095,11 +2240,61 @@ class TuiApp:
             right_w = max(0, box_w - 60)
             self._safe_add(stdscr, row_y, left + 58, spec.license_url[:right_w], curses.A_DIM)
 
-        self._safe_add(stdscr, top + 3 + max_rows, left + 2, "Logs:", curses.A_BOLD)
-        log_rows = box_h - (7 + max_rows)
+        option_row = top + 3 + max_rows
+        option_idx = len(self.setup_rows)
+        option_marker = "▶" if self.setup_idx == option_idx else " "
+        option_checked = "x" if self.setup_font_filter else " "
+        option_text = (
+            f"{option_marker} [{option_checked}] Auto-build using font-filter ({default_build_font()})"
+        )
+        option_attr = curses.A_BOLD if self.setup_idx == option_idx else 0
+        self._safe_add(stdscr, option_row, left + 2, option_text[: max(0, box_w - 4)], option_attr)
+
+        self._safe_add(stdscr, option_row + 1, left + 2, "Logs:", curses.A_BOLD)
+        log_rows = box_h - (8 + max_rows)
         start = max(0, len(self.setup_logs) - log_rows)
         for i, line in enumerate(self.setup_logs[start : start + log_rows]):
-            self._safe_add(stdscr, top + 4 + max_rows + i, left + 2, line[: max(0, box_w - 4)])
+            self._safe_add(stdscr, option_row + 2 + i, left + 2, line[: max(0, box_w - 4)])
+
+    def _render_advanced_overlay(self, stdscr: curses.window) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(20, h - 2)
+        box_w = min(124, w - 2)
+        top = max(1, (h - box_h) // 2)
+        left = max(1, (w - box_w) // 2)
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Advanced Rebuild")
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            "Up/Down: move  Space/Enter: action  e: edit font  f: toggle filter  d/x: rebuild  Esc: close",
+            curses.A_BOLD,
+        )
+
+        rows: list[str] = [
+            f"[{'x' if self.advanced_use_font_filter else ' '}] Rebuild with font filter",
+            f"Font: {self.advanced_font_spec or default_build_font()}",
+            "Run rebuild now",
+        ]
+        for idx, row in enumerate(rows):
+            marker = "▶" if self.advanced_idx == idx else " "
+            attr = curses.A_BOLD if self.advanced_idx == idx else 0
+            self._safe_add(stdscr, top + 3 + idx, left + 2, f"{marker} {row}"[: max(0, box_w - 4)], attr)
+
+        self._safe_add(stdscr, top + 7, left + 2, "Logs:", curses.A_BOLD)
+        log_rows = box_h - 10
+        start = max(0, len(self.advanced_logs) - log_rows)
+        for i, line in enumerate(self.advanced_logs[start : start + log_rows]):
+            self._safe_add(stdscr, top + 8 + i, left + 2, line[: max(0, box_w - 4)])
+
+        if self.advanced_font_input_open:
+            prompt = f"Font spec: {self.advanced_font_input}"
+            self._safe_add(stdscr, top + box_h - 2, left + 2, prompt[: max(0, box_w - 4)], curses.A_BOLD)
+            try:
+                cursor_x = min(left + box_w - 2, left + 2 + len("Font spec: ") + len(self.advanced_font_input))
+                stdscr.move(top + box_h - 2, cursor_x)
+            except curses.error:
+                pass
 
     def _render_ack_overlay(self, stdscr: curses.window, startup: bool) -> None:
         h, w = stdscr.getmaxyx()

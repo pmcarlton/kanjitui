@@ -239,20 +239,29 @@ def test_radical_results_follow_current_filters(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_shift_s_opens_setup_and_s_toggles_phonetic(tmp_path: Path) -> None:
+def test_shift_s_and_shift_r_open_setup_and_advanced(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)
     try:
         app = TuiApp(conn)
         assert app.setup_open is False
+        assert app.advanced_open is False
         assert app.show_phonetic is False
 
         assert app._handle_normal_key(ord("S")) is True
         assert app.setup_open is True
+        assert app.advanced_open is False
         assert app.show_phonetic is False
 
         assert app._handle_setup_key(27) is True
         assert app.setup_open is False
+
+        assert app._handle_normal_key(ord("R")) is True
+        assert app.advanced_open is True
+        assert app.show_phonetic is False
+
+        assert app._handle_advanced_key(27) is True
+        assert app.advanced_open is False
 
         assert app._handle_normal_key(ord("s")) is True
         assert app.show_phonetic is True
@@ -284,8 +293,9 @@ def test_setup_download_triggers_auto_build_and_reconnect(tmp_path: Path, monkey
         progress("download ok")
         return {"unihan": "ok"}
 
-    def fake_rebuild_database_from_sources(paths, db_path, progress):
+    def fake_rebuild_database_from_sources(paths, db_path, progress, font=None):
         calls["db_path"] = db_path
+        calls["font"] = font
         progress("build ok")
         return {"included": 1, "excluded_font": 0}
 
@@ -296,8 +306,40 @@ def test_setup_download_triggers_auto_build_and_reconnect(tmp_path: Path, monkey
     try:
         assert calls["selected"] == ("unihan",)
         assert Path(calls["db_path"]) == db_path
+        assert calls["font"] is None
         assert any("build ok" in line for line in app.setup_logs)
         assert app.conn.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        app.conn.close()
+
+
+def test_setup_download_passes_default_font_when_font_filter_enabled(tmp_path: Path, monkeypatch) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    app = TuiApp(conn)
+    app.setup_selected = {"unihan"}
+    app.setup_font_filter = True
+    calls: dict[str, object] = {}
+
+    def fake_download_selected_sources(selected, paths, progress):
+        calls["selected"] = tuple(selected)
+        progress("download ok")
+        return {"unihan": "ok"}
+
+    def fake_rebuild_database_from_sources(paths, db_path, progress, font=None):
+        calls["font"] = font
+        progress("build ok")
+        return {"included": 1, "excluded_font": 0}
+
+    monkeypatch.setattr("kanjitui.tui.app.default_build_font", lambda: "Test Font")
+    monkeypatch.setattr("kanjitui.tui.app.download_selected_sources", fake_download_selected_sources)
+    monkeypatch.setattr("kanjitui.tui.app.rebuild_database_from_sources", fake_rebuild_database_from_sources)
+
+    app._run_setup_download()
+    try:
+        assert calls["selected"] == ("unihan",)
+        assert calls["font"] == "Test Font"
+        assert any("Using font filter for setup auto-build: Test Font" in line for line in app.setup_logs)
     finally:
         app.conn.close()
 
