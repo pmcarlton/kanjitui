@@ -32,14 +32,31 @@ def _iter_font_name_candidates(font_spec: str) -> Iterable[str]:
     base = font_spec.strip()
     if not base:
         return
-    yield base
-    normalized = base.lower()
-    if "cjk" not in normalized:
-        return
-    if normalized.endswith((" jp", " sc", " tc", " kr", " hk")):
-        return
-    for suffix in (" JP", " SC", " TC", " KR", " HK"):
-        yield base + suffix
+    emitted: set[str] = set()
+
+    def emit(candidate: str) -> Iterable[str]:
+        text = candidate.strip()
+        if not text or text in emitted:
+            return
+        emitted.add(text)
+        yield text
+
+    roots = [base]
+    collapsed = " ".join(base.split())
+    if " mono " in collapsed.lower():
+        roots.append(collapsed.replace(" Mono ", " "))
+
+    for root in roots:
+        for value in emit(root):
+            yield value
+        normalized = root.lower()
+        if "cjk" not in normalized:
+            continue
+        if normalized.endswith((" jp", " sc", " tc", " kr", " hk")):
+            continue
+        for suffix in (" JP", " SC", " TC", " KR", " HK"):
+            for value in emit(root + suffix):
+                yield value
 
 
 def compute_font_coverage(font_spec: str) -> set[int] | None:
