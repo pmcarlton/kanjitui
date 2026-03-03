@@ -1253,17 +1253,23 @@ class KanjiGuiWindow(QMainWindow):
 
     def _related_rows_for_detail(self, detail: dict, include_phonetic: bool) -> list[list[int]]:
         cp = int(detail["cp"])
-        allowed = set(self.state.ordered_cps)
-        phonetic_rows: list[tuple[int, str, str, str | None, str | None]] = []
-        if include_phonetic:
-            phonetic_rows = db_query.get_phonetic_series(self.state.conn, cp, limit=120)
-        return build_related_rows(
+        rows = build_related_rows(
             cp,
             detail["jp_words"],
             detail["cn_words"],
-            phonetic_rows=phonetic_rows,
-            allowed=allowed,
+            phonetic_rows=None,
+            allowed=None,
         )
+        if include_phonetic:
+            seen = {member for row in rows for member in row}
+            for member_cp, _member_ch, _key, _pinyin_marked, _pinyin_numbered in db_query.get_phonetic_series(
+                self.state.conn, cp, limit=120
+            ):
+                if member_cp == cp or member_cp in seen:
+                    continue
+                seen.add(member_cp)
+                rows.append([member_cp])
+        return rows
 
     def _selected_related_cp_for_detail(self, detail: dict, include_phonetic: bool) -> int | None:
         rows = self._related_rows_for_detail(detail, include_phonetic=include_phonetic)
@@ -1328,6 +1334,9 @@ class KanjiGuiWindow(QMainWindow):
         selected = self._selected_related_cp_for_detail(detail, include_phonetic=self.state.show_phonetic)
         if selected is None:
             self.state.message = "No related glyph selected"
+            return False
+        if selected not in self.state.ordered_cps:
+            self.state.message = f"Related glyph {chr(selected)} U+{selected:04X} is filtered out"
             return False
         self.state.jump_to_cp(selected)
         return True
@@ -1563,7 +1572,6 @@ class KanjiGuiWindow(QMainWindow):
 
         self.glyph_label.setText(detail["ch"])
         self.glyph_meta.setText(f"U+{cp:04X}")
-        allowed_cps = set(self.state.ordered_cps)
         selected_related_cp = self._selected_related_cp_for_detail(
             detail,
             include_phonetic=self.state.show_phonetic,
@@ -1584,7 +1592,7 @@ class KanjiGuiWindow(QMainWindow):
                 reading = kana or "-"
                 if self.state.show_jp_romaji and kana:
                     reading = search_normalize.kana_to_romaji(kana)
-                row_cps = jp_word_related_cps(cp, word, allowed=allowed_cps)
+                row_cps = jp_word_related_cps(cp, word, allowed=None)
                 marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
                 display_word = self._mark_selected_glyph(word, selected_related_cp if selected_related_cp in row_cps else None)
                 jp_lines.append(f"{marker} {rank}. {display_word}  {reading}  {gloss or '-'}")
@@ -1604,7 +1612,7 @@ class KanjiGuiWindow(QMainWindow):
         if detail["cn_words"]:
             for trad, simp, marked, numbered, gloss, rank in detail["cn_words"][:5]:
                 py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
-                row_cps = cn_word_related_cps(cp, trad, simp, allowed=allowed_cps)
+                row_cps = cn_word_related_cps(cp, trad, simp, allowed=None)
                 marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
                 display_trad = self._mark_selected_glyph(trad, selected_related_cp if selected_related_cp in row_cps else None)
                 display_simp = self._mark_selected_glyph(simp, selected_related_cp if selected_related_cp in row_cps else None)

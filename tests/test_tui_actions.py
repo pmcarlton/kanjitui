@@ -422,6 +422,31 @@ def test_shift_left_right_cycle_related_on_same_line(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_phonetic_rows_participate_in_related_selection(tmp_path: Path, monkeypatch) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        if 0x6F22 in app.ordered_cps:
+            app.pos = app.ordered_cps.index(0x6F22)
+        app.show_phonetic = True
+
+        def fake_phonetic(_conn, _cp, limit=120):
+            _ = limit
+            return [(0x3400, "㐀", "PHON:X", None, None)]
+
+        monkeypatch.setattr("kanjitui.tui.app.db_query.get_phonetic_series", fake_phonetic)
+        detail = db_query.get_char_detail(app.conn, app.current_cp or 0x6F22)
+        rows = app._related_rows_for_detail(detail, include_phonetic=True)
+        assert rows
+        app.related_row_idx = max(0, len(rows) - 2)
+        app.related_col_idx = 0
+        assert app._move_related_selection_vertical(+1) is True
+        assert "U+3400" in app.message
+    finally:
+        conn.close()
+
+
 def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)
