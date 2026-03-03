@@ -249,6 +249,24 @@ pre {
   font-size: 0.95rem;
 }
 
+.docs-link p {
+  margin: 0.35rem 0 0;
+}
+
+.docs-anchor {
+  display: inline-block;
+  margin-top: 0.2rem;
+  text-decoration: none;
+  color: #0f4158;
+  font-weight: 600;
+  border-bottom: 1px solid #0f4158;
+}
+
+.docs-anchor:hover {
+  color: #0d6b8e;
+  border-color: #0d6b8e;
+}
+
 footer {
   text-align: center;
   padding: 1rem 1rem 2.2rem;

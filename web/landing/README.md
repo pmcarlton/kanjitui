@@ -2,6 +2,8 @@
 
 Academic-style static landing page for `kanjitui` / `kanjigui`.
 
+The page links to `/docs/` for the MkDocs user manual.
+
 ## Files
 
 - `index.html`
@@ -10,6 +12,13 @@ Academic-style static landing page for `kanjitui` / `kanjigui`.
 - `assets/kanjiTUI.png` (featured UI screenshot)
 
 ## Serve with Caddy (recommended for static)
+
+Build docs into this static root first:
+
+```bash
+cd /absolute/path/to/kanjitui
+make build-web-docs
+```
 
 Example `Caddyfile` block:
 
@@ -31,3 +40,10 @@ gunicorn --bind 127.0.0.1:8080 wsgi:app
 ```
 
 Then reverse-proxy from Caddy/Nginx if desired.
+
+To expose docs with Gunicorn, also run:
+
+```bash
+cd /absolute/path/to/kanjitui
+make build-web-docs
+```
