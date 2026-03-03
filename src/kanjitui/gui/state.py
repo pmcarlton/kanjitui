@@ -58,7 +58,8 @@ class GuiState:
         self.show_jp_romaji = False
         self.hide_no_reading = False
         self.variant_idx = 0
-        self.related_idx = 0
+        self.related_row_idx = 0
+        self.related_col_idx = 0
 
         self.search_input = ""
         self.search_results: list[dict] = []
@@ -352,7 +353,8 @@ class GuiState:
     def jump_to_cp(self, cp: int) -> None:
         if cp in self.ordered_cps:
             self.pos = self.ordered_cps.index(cp)
-            self.related_idx = 0
+            self.related_row_idx = 0
+            self.related_col_idx = 0
             self.message = f"Jumped to U+{cp:04X}"
 
     def run_search(self, query: str) -> list[dict]:

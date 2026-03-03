@@ -3,6 +3,7 @@ from __future__ import annotations
 import curses
 from pathlib import Path
 
+from kanjitui.db import query as db_query
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db.query import connect
 from kanjitui.db.user import UserStore
@@ -390,6 +391,33 @@ def test_up_down_select_related_and_enter_jumps(tmp_path: Path) -> None:
         if "Related:" in app.message:
             assert app._handle_normal_key(10) is True
             assert app.current_cp != start_cp
+    finally:
+        conn.close()
+
+
+def test_shift_left_right_cycle_related_on_same_line(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        if 0x6F22 in app.ordered_cps:
+            app.pos = app.ordered_cps.index(0x6F22)
+        current = app.current_cp
+        assert current is not None
+        detail_obj = db_query.get_char_detail(app.conn, current)
+        # Find a related row that has at least 2 selectable glyphs.
+        rows = app._related_rows_for_detail(detail_obj, include_phonetic=False)
+        idx = next((i for i, row in enumerate(rows) if len(row) > 1), None)
+        if idx is None:
+            return
+        app.related_row_idx = idx
+        app.related_col_idx = 0
+        first = app._selected_related_cp(detail_obj, include_phonetic=False)
+        assert first is not None
+        assert app._move_related_selection_horizontal(+1) is True
+        second = app._selected_related_cp(detail_obj, include_phonetic=False)
+        assert second is not None
+        assert second != first
     finally:
         conn.close()
 

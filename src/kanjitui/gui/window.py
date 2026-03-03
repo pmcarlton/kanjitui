@@ -10,7 +10,7 @@ import webbrowser
 from typing import Callable
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -43,9 +43,9 @@ from kanjitui.db.user import UserStore
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.related_nav import (
-    build_related_candidates,
-    cn_word_related_cp,
-    jp_word_related_cp,
+    build_related_rows,
+    cn_word_related_cps,
+    jp_word_related_cps,
 )
 from kanjitui.search import normalize as search_normalize
 from kanjitui.setup_resources import (
@@ -103,9 +103,18 @@ def ui_font(widget: QWidget | None, size: int, weight: QFont.Weight | None = Non
 
 
 class LiveTextDialog(QDialog):
-    def __init__(self, title: str, on_close: Callable[[], None], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        on_close: Callable[[], None],
+        parent: QWidget | None = None,
+        close_keys: set[str] | None = None,
+        close_on_any_key: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._on_close = on_close
+        self._close_keys = close_keys or set()
+        self._close_on_any_key = close_on_any_key
         self.setWindowTitle(title)
         self.resize(820, 420)
 
@@ -118,9 +127,26 @@ class LiveTextDialog(QDialog):
     def set_lines(self, lines: list[str]) -> None:
         self.text.setPlainText("\n".join(lines))
 
+    def set_close_behavior(self, close_keys: set[str] | None, close_on_any_key: bool) -> None:
+        self._close_keys = close_keys or set()
+        self._close_on_any_key = close_on_any_key
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._on_close()
         super().closeEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            return
+        text = event.text()
+        if self._close_on_any_key and event.key() not in (Qt.Key.Key_Shift, Qt.Key.Key_Control, Qt.Key.Key_Alt):
+            self.close()
+            return
+        if text and text in self._close_keys:
+            self.close()
+            return
+        super().keyPressEvent(event)
 
 
 class SearchDialog(QDialog):
@@ -987,8 +1013,24 @@ class KanjiGuiWindow(QMainWindow):
         text = QPlainTextEdit(box)
         text.setReadOnly(True)
         text.setFont(ui_font(self, 16))
+        text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         layout.addWidget(text)
         return box, text
+
+    def _set_panel_text(self, widget: QPlainTextEdit, lines: list[str]) -> None:
+        widget.setPlainText("\n".join(lines))
+        fm = QFontMetrics(widget.font())
+        content_w = max(140, widget.viewport().width() - 10)
+        visual_lines = 0
+        source_lines = lines if lines else [""]
+        for line in source_lines:
+            width = max(1, fm.horizontalAdvance(line))
+            visual_lines += max(1, math.ceil(width / content_w))
+        base = visual_lines * fm.lineSpacing()
+        padding = (widget.frameWidth() * 2) + 18
+        widget.setFixedHeight(max(72, base + padding))
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -1093,6 +1135,14 @@ class KanjiGuiWindow(QMainWindow):
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(handler)
             self._nav_shortcuts.append(shortcut)
+        for sequence, handler in (
+            ("Shift+Left", self._shortcut_move_related_left),
+            ("Shift+Right", self._shortcut_move_related_right),
+        ):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(handler)
+            self._nav_shortcuts.append(shortcut)
 
     def _shortcut_move_next(self) -> None:
         self.state.move_next()
@@ -1106,14 +1156,22 @@ class KanjiGuiWindow(QMainWindow):
         if self.state.panel_focus == "variants" and self.state.show_variants:
             _ = self._move_variant_selection(+1)
         else:
-            _ = self._move_related_selection(+1)
+            _ = self._move_related_selection_vertical(+1)
         self.refresh_view()
 
     def _shortcut_move_up(self) -> None:
         if self.state.panel_focus == "variants" and self.state.show_variants:
             _ = self._move_variant_selection(-1)
         else:
-            _ = self._move_related_selection(-1)
+            _ = self._move_related_selection_vertical(-1)
+        self.refresh_view()
+
+    def _shortcut_move_related_left(self) -> None:
+        _ = self._move_related_selection_horizontal(-1)
+        self.refresh_view()
+
+    def _shortcut_move_related_right(self) -> None:
+        _ = self._move_related_selection_horizontal(+1)
         self.refresh_view()
 
     def _shortcut_move_home(self) -> None:
@@ -1140,6 +1198,16 @@ class KanjiGuiWindow(QMainWindow):
         if active:
             return "QGroupBox{border:3px double #444; margin-top: 8px;} QGroupBox::title{subcontrol-origin: margin; left: 8px; padding:0 3px;}"
         return "QGroupBox{border:1px solid #666; margin-top: 8px;} QGroupBox::title{subcontrol-origin: margin; left: 8px; padding:0 3px;}"
+
+    @staticmethod
+    def _mark_selected_glyph(text: str, selected_cp: int | None) -> str:
+        if selected_cp is None:
+            return text
+        glyph = chr(selected_cp)
+        idx = text.find(glyph)
+        if idx < 0:
+            return text
+        return text[:idx] + "[" + glyph + "]" + text[idx + 1 :]
 
     def _current_detail(self) -> dict | None:
         cp = self.state.current_cp
@@ -1183,13 +1251,13 @@ class KanjiGuiWindow(QMainWindow):
         self.state.jump_to_cp(selected.cp)
         return True
 
-    def _related_candidates_for_detail(self, detail: dict, include_phonetic: bool) -> list[int]:
+    def _related_rows_for_detail(self, detail: dict, include_phonetic: bool) -> list[list[int]]:
         cp = int(detail["cp"])
         allowed = set(self.state.ordered_cps)
         phonetic_rows: list[tuple[int, str, str, str | None, str | None]] = []
         if include_phonetic:
             phonetic_rows = db_query.get_phonetic_series(self.state.conn, cp, limit=120)
-        return build_related_candidates(
+        return build_related_rows(
             cp,
             detail["jp_words"],
             detail["cn_words"],
@@ -1198,25 +1266,59 @@ class KanjiGuiWindow(QMainWindow):
         )
 
     def _selected_related_cp_for_detail(self, detail: dict, include_phonetic: bool) -> int | None:
-        candidates = self._related_candidates_for_detail(detail, include_phonetic=include_phonetic)
-        if not candidates:
-            self.state.related_idx = 0
+        rows = self._related_rows_for_detail(detail, include_phonetic=include_phonetic)
+        if not rows:
+            self.state.related_row_idx = 0
+            self.state.related_col_idx = 0
             return None
-        self.state.related_idx = max(0, min(self.state.related_idx, len(candidates) - 1))
-        return candidates[self.state.related_idx]
+        self.state.related_row_idx = max(0, min(self.state.related_row_idx, len(rows) - 1))
+        row = rows[self.state.related_row_idx]
+        self.state.related_col_idx = max(0, min(self.state.related_col_idx, len(row) - 1))
+        return row[self.state.related_col_idx]
 
-    def _move_related_selection(self, delta: int) -> bool:
+    def _move_related_selection_vertical(self, delta: int) -> bool:
         detail = self._current_detail()
         if detail is None:
             return False
-        candidates = self._related_candidates_for_detail(detail, include_phonetic=self.state.show_phonetic)
-        if not candidates:
-            self.state.related_idx = 0
+        rows = self._related_rows_for_detail(detail, include_phonetic=self.state.show_phonetic)
+        if not rows:
+            self.state.related_row_idx = 0
+            self.state.related_col_idx = 0
             self.state.message = "No related glyphs in JP/CN words"
             return False
-        self.state.related_idx = (self.state.related_idx + delta) % len(candidates)
-        selected = candidates[self.state.related_idx]
-        self.state.message = f"Related: {chr(selected)} U+{selected:04X} ({self.state.related_idx + 1}/{len(candidates)})"
+        self.state.related_row_idx = (self.state.related_row_idx + delta) % len(rows)
+        row = rows[self.state.related_row_idx]
+        self.state.related_col_idx = min(self.state.related_col_idx, len(row) - 1)
+        selected = row[self.state.related_col_idx]
+        self.state.message = (
+            f"Related: {chr(selected)} U+{selected:04X} "
+            f"(line {self.state.related_row_idx + 1}/{len(rows)}, pos {self.state.related_col_idx + 1}/{len(row)})"
+        )
+        return True
+
+    def _move_related_selection_horizontal(self, delta: int) -> bool:
+        detail = self._current_detail()
+        if detail is None:
+            return False
+        rows = self._related_rows_for_detail(detail, include_phonetic=self.state.show_phonetic)
+        if not rows:
+            self.state.related_row_idx = 0
+            self.state.related_col_idx = 0
+            self.state.message = "No related glyphs in JP/CN words"
+            return False
+        self.state.related_row_idx = max(0, min(self.state.related_row_idx, len(rows) - 1))
+        row = rows[self.state.related_row_idx]
+        if len(row) <= 1:
+            self.state.related_col_idx = 0
+            selected = row[0]
+            self.state.message = f"Related line has one glyph: {chr(selected)} U+{selected:04X}"
+            return True
+        self.state.related_col_idx = (self.state.related_col_idx + delta) % len(row)
+        selected = row[self.state.related_col_idx]
+        self.state.message = (
+            f"Related: {chr(selected)} U+{selected:04X} "
+            f"(line {self.state.related_row_idx + 1}/{len(rows)}, pos {self.state.related_col_idx + 1}/{len(row)})"
+        )
         return True
 
     def _jump_to_selected_related(self) -> bool:
@@ -1257,6 +1359,8 @@ class KanjiGuiWindow(QMainWindow):
         title: str,
         lines: list[str],
         on_close: Callable[[], None] | None = None,
+        close_keys: set[str] | None = None,
+        close_on_any_key: bool = False,
     ) -> None:
         dlg = self._overlays.get(key)
         if not enabled:
@@ -1272,10 +1376,17 @@ class KanjiGuiWindow(QMainWindow):
                 self._overlays.pop(key, None)
                 self.refresh_view()
 
-            dlg = LiveTextDialog(title, _on_close, self)
+            dlg = LiveTextDialog(
+                title,
+                _on_close,
+                self,
+                close_keys=close_keys,
+                close_on_any_key=close_on_any_key,
+            )
             dlg.show()
             self._overlays[key] = dlg
         dlg.setWindowTitle(title)
+        dlg.set_close_behavior(close_keys=close_keys, close_on_any_key=close_on_any_key)
         dlg.set_lines(lines)
         dlg.raise_()
 
@@ -1292,7 +1403,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.show_help,
             "Help",
             [
-                "Navigation: <-/->/j/k move order; Up/Down select related glyph; Home/End ends",
+                "Navigation: <-/->/j/k move order; Up/Down select related glyph; Shift-Left/Right same-line",
                 "Ordering: O cycle ordering, F cycle freq profile",
                 "JP panel: m toggles kana/romaji",
                 "Filter: f opens menu; presets can be saved/loaded/deleted",
@@ -1314,6 +1425,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Global: ? Help, q Quit",
             ],
             on_close=lambda: setattr(self.state, "show_help", False),
+            close_keys={"?"},
         )
 
         prov = db_query.get_provenance(self.state.conn, cp, limit=100)
@@ -1326,6 +1438,7 @@ class KanjiGuiWindow(QMainWindow):
             "Provenance",
             prov_lines,
             on_close=lambda: setattr(self.state, "show_provenance", False),
+            close_keys={"p", "P"},
         )
 
         comp = db_query.get_components(self.state.conn, cp)
@@ -1336,6 +1449,7 @@ class KanjiGuiWindow(QMainWindow):
             "Components",
             comp_lines,
             on_close=lambda: setattr(self.state, "show_components", False),
+            close_keys={"c", "C"},
         )
 
         ph = db_query.get_phonetic_series(self.state.conn, cp, limit=120)
@@ -1355,6 +1469,7 @@ class KanjiGuiWindow(QMainWindow):
             "Phonetic Series",
             ph_lines,
             on_close=lambda: setattr(self.state, "show_phonetic", False),
+            close_keys={"s", "S"},
         )
 
         self._sync_overlay(
@@ -1363,6 +1478,7 @@ class KanjiGuiWindow(QMainWindow):
             "User Workspace",
             self._format_user_overlay(cp),
             on_close=lambda: setattr(self.state, "show_user_overlay", False),
+            close_keys={"u", "U"},
         )
 
         self._sync_overlay(
@@ -1371,6 +1487,7 @@ class KanjiGuiWindow(QMainWindow):
             "Acknowledgements",
             self._ack_lines(),
             on_close=lambda: setattr(self, "show_ack_overlay", False),
+            close_keys={"A"},
         )
         startup_lines = [
             "Welcome to kanjigui.",
@@ -1386,6 +1503,7 @@ class KanjiGuiWindow(QMainWindow):
             "Startup",
             startup_lines,
             on_close=self._dismiss_startup_overlay,
+            close_on_any_key=True,
         )
 
     def refresh_view(self) -> None:
@@ -1401,10 +1519,10 @@ class KanjiGuiWindow(QMainWindow):
             self.nav_strip.setText("")
             self.glyph_label.setText("?")
             self.glyph_meta.setText("")
-            self.jp_text.setPlainText("")
-            self.cn_text.setPlainText("")
-            self.sent_text.setPlainText("")
-            self.var_text.setPlainText("")
+            self._set_panel_text(self.jp_text, [])
+            self._set_panel_text(self.cn_text, [])
+            self._set_panel_text(self.sent_text, [])
+            self._set_panel_text(self.var_text, [])
             self.status_label.setText(self.state.message)
             fake_detail = {"cp": 0}
             self._sync_overlays(fake_detail)
@@ -1466,12 +1584,13 @@ class KanjiGuiWindow(QMainWindow):
                 reading = kana or "-"
                 if self.state.show_jp_romaji and kana:
                     reading = search_normalize.kana_to_romaji(kana)
-                row_cp = jp_word_related_cp(cp, word, allowed=allowed_cps)
-                marker = "▶" if (row_cp is not None and row_cp == selected_related_cp) else " "
-                jp_lines.append(f"{marker} {rank}. {word}  {reading}  {gloss or '-'}")
+                row_cps = jp_word_related_cps(cp, word, allowed=allowed_cps)
+                marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
+                display_word = self._mark_selected_glyph(word, selected_related_cp if selected_related_cp in row_cps else None)
+                jp_lines.append(f"{marker} {rank}. {display_word}  {reading}  {gloss or '-'}")
         else:
             jp_lines.append("  (no examples found)")
-        self.jp_text.setPlainText("\n".join(jp_lines))
+        self._set_panel_text(self.jp_text, jp_lines)
 
         if detail["cn_readings"]:
             readings = "  ".join(
@@ -1485,12 +1604,14 @@ class KanjiGuiWindow(QMainWindow):
         if detail["cn_words"]:
             for trad, simp, marked, numbered, gloss, rank in detail["cn_words"][:5]:
                 py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
-                row_cp = cn_word_related_cp(cp, trad, simp, allowed=allowed_cps)
-                marker = "▶" if (row_cp is not None and row_cp == selected_related_cp) else " "
-                cn_lines.append(f"{marker} {rank}. {trad}/{simp}  {py}  {gloss}")
+                row_cps = cn_word_related_cps(cp, trad, simp, allowed=allowed_cps)
+                marker = "▶" if (selected_related_cp is not None and selected_related_cp in row_cps) else " "
+                display_trad = self._mark_selected_glyph(trad, selected_related_cp if selected_related_cp in row_cps else None)
+                display_simp = self._mark_selected_glyph(simp, selected_related_cp if selected_related_cp in row_cps else None)
+                cn_lines.append(f"{marker} {rank}. {display_trad}/{display_simp}  {py}  {gloss}")
         else:
             cn_lines.append("  (no examples found)")
-        self.cn_text.setPlainText("\n".join(cn_lines))
+        self._set_panel_text(self.cn_text, cn_lines)
 
         langs = self.state.sentence_langs()
         sent_limit = 6 if len(langs) > 1 else 3
@@ -1509,7 +1630,7 @@ class KanjiGuiWindow(QMainWindow):
         self.jp_group.setTitle("JP [1]")
         self.cn_group.setTitle("CN [2]")
         self.sent_group.setTitle(f"Sentences [3] ({langs_label})")
-        self.sent_text.setPlainText("\n".join(sent_lines))
+        self._set_panel_text(self.sent_text, sent_lines)
 
         graph, targets = self._variant_data_for(cp)
         self.var_group.setTitle("Variants [4]")
@@ -1527,7 +1648,7 @@ class KanjiGuiWindow(QMainWindow):
                 var_lines.append(f"... +{len(targets) - 16} more")
         else:
             var_lines.append("(no variant targets)")
-        self.var_text.setPlainText("\n".join(var_lines))
+        self._set_panel_text(self.var_text, var_lines)
 
         self.jp_group.setVisible(self.state.show_jp)
         self.cn_group.setVisible(self.state.show_cn)
@@ -1545,7 +1666,7 @@ class KanjiGuiWindow(QMainWindow):
 
         stroke_available = self.stroke_repo.has_char(detail["ch"])
         menu_line = (
-            "Nav:<-/->/j/k order  Up/Down related  Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
+            "Nav:<-/->/j/k order  Up/Down related  Shift-Left/Right same-line  Home End Tab Enter  Search:/  Radical:r  Panes:1 2 3 4  "
             "Overlays:c s p  User:b B n g u  JP:m  Filter:f N  CCAMC:i  Order:O F  Setup:S  Advanced:R  Ack:A"
         )
         if stroke_available:
@@ -1786,10 +1907,25 @@ class KanjiGuiWindow(QMainWindow):
         self.state.message = f"Stroke animation: {ch}"
         self.refresh_view()
 
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self.refresh_view()
+
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         key = event.key()
         text = event.text()
         self._dismiss_startup_overlay()
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if key == Qt.Key.Key_Left:
+                _ = self._move_related_selection_horizontal(-1)
+                self.refresh_view()
+                event.accept()
+                return
+            if key == Qt.Key.Key_Right:
+                _ = self._move_related_selection_horizontal(+1)
+                self.refresh_view()
+                event.accept()
+                return
 
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.state.panel_focus == "variants" and self.state.show_variants:
