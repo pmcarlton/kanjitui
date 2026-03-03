@@ -76,6 +76,20 @@ MIGRATIONS: tuple[Migration, ...] = (
         CREATE INDEX IF NOT EXISTS idx_sentences_cp_lang ON sentences(cp, lang, rank);
         """,
     ),
+    Migration(
+        version=4,
+        name="phase_e_cp_path_indexes",
+        sql="""
+        CREATE INDEX IF NOT EXISTS idx_jp_readings_cp_rank ON jp_readings(cp, rank, reading);
+        CREATE INDEX IF NOT EXISTS idx_jp_gloss_cp ON jp_gloss(cp, gloss);
+        CREATE INDEX IF NOT EXISTS idx_cn_readings_cp_rank ON cn_readings(cp, rank, pinyin_numbered);
+        CREATE INDEX IF NOT EXISTS idx_cn_gloss_cp ON cn_gloss(cp, gloss);
+        CREATE INDEX IF NOT EXISTS idx_variants_cp_kind_target ON variants(cp, kind, target_cp);
+        CREATE INDEX IF NOT EXISTS idx_jp_words_cp_rank ON jp_words(cp, rank);
+        CREATE INDEX IF NOT EXISTS idx_cn_words_cp_rank ON cn_words(cp, rank);
+        CREATE INDEX IF NOT EXISTS idx_search_index_cp ON search_index(cp);
+        """,
+    ),
 )
 
 

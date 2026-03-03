@@ -34,3 +34,27 @@ def test_rebuild_schema_clears_data_and_reapplies() -> None:
         assert current_schema_version(conn) >= 1
     finally:
         conn.close()
+
+
+def test_cp_path_indexes_exist() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        apply_migrations(conn)
+        expected = {
+            "idx_jp_readings_cp_rank",
+            "idx_jp_gloss_cp",
+            "idx_cn_readings_cp_rank",
+            "idx_cn_gloss_cp",
+            "idx_variants_cp_kind_target",
+            "idx_jp_words_cp_rank",
+            "idx_cn_words_cp_rank",
+            "idx_search_index_cp",
+        }
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+        present = {str(row[0]) for row in rows}
+        missing = expected - present
+        assert not missing, f"Missing indexes: {sorted(missing)}"
+    finally:
+        conn.close()
