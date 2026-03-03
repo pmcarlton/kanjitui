@@ -7,6 +7,7 @@ Academic-style static landing page for `kanjitui` / `kanjigui`.
 - `index.html`
 - `styles.css`
 - `wsgi.py` (optional, for Gunicorn static serving)
+- `assets/kanjiTUI.png` (featured UI screenshot)
 
 ## Serve with Caddy (recommended for static)
 
@@ -30,4 +31,3 @@ gunicorn --bind 127.0.0.1:8080 wsgi:app
 ```
 
 Then reverse-proxy from Caddy/Nginx if desired.
-
