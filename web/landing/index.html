@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>kanjitui / kanjigui</title>
+    <meta
+      name="description"
+      content="An academic-oriented explorer for Han characters across Japanese and Chinese readings, variants, components, and provenance."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Serif+JP:wght@500;700&family=Noto+Serif+SC:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="grid-bg" aria-hidden="true"></div>
+    <header class="hero">
+      <p class="eyebrow">Comparative Han Character Research Tool</p>
+      <h1>kanjitui <span>/</span> kanjigui</h1>
+      <p class="lede">
+        Explore readings, variants, components, phonetic series, and provenance with a keyboard-first workflow
+        designed for serious learners and textual analysis.
+      </p>
+      <div class="actions">
+        <a href="#quickstart">Quick Start</a>
+        <a href="#capabilities">Capabilities</a>
+        <a href="#modes">Display Modes</a>
+      </div>
+    </header>
+
+    <aside class="glyph-column left" aria-hidden="true">
+      <figure>
+        <ruby>鬱<rt>うつ / yù</rt></ruby>
+      </figure>
+      <figure>
+        <ruby>麤<rt>そ / cū</rt></ruby>
+      </figure>
+      <figure>
+        <ruby>驫<rt>biāo</rt></ruby>
+      </figure>
+    </aside>
+    <aside class="glyph-column right" aria-hidden="true">
+      <figure>
+        <ruby>龘<rt>dá</rt></ruby>
+      </figure>
+      <figure>
+        <ruby>䨻<rt>bèng</rt></ruby>
+      </figure>
+      <figure>
+        <ruby>爨<rt>cuàn</rt></ruby>
+      </figure>
+    </aside>
+
+    <main>
+      <section id="capabilities" class="panel reveal">
+        <h2>Research-Centered Capabilities</h2>
+        <div class="cards">
+          <article>
+            <h3>Lexical Comparison</h3>
+            <p>JP/CN readings, glosses, and example words shown side-by-side with rapid glyph-to-glyph traversal.</p>
+          </article>
+          <article>
+            <h3>Structural Analysis</h3>
+            <p>Variants graph, radicals, components, and phonetic series overlays support form-based investigation.</p>
+          </article>
+          <article>
+            <h3>Study Workflow</h3>
+            <p>Bookmarks, notes, presets, and history make repeatable exploration sessions practical.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="modes" class="panel reveal">
+        <h2>Two Display Modes, One Data Core</h2>
+        <div class="split">
+          <div>
+            <h3>kanjitui</h3>
+            <p>
+              Terminal mode for high-speed keyboard navigation and low-friction remote usage. Ideal for scholars who
+              live in tmux/SSH environments.
+            </p>
+          </div>
+          <div>
+            <h3>kanjigui</h3>
+            <p>
+              Desktop mode with a large current glyph and overlay windows, preserving parity with core logic and
+              keybindings.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="quickstart" class="panel reveal">
+        <h2>Quick Start</h2>
+        <pre><code>pip install -e .[gui]
+make fetch-data
+make build-db
+kanjitui --db data/db.sqlite
+# or
+kanjigui --db data/db.sqlite</code></pre>
+        <p class="note">
+          For tofu-free navigation, rebuild with the same font family/path used by your terminal or GUI runtime.
+        </p>
+      </section>
+
+      <section class="panel reveal">
+        <h2>Audience</h2>
+        <ul>
+          <li>Intermediate/advanced language learners cross-checking Japanese and Mandarin readings.</li>
+          <li>Kanji/Hanzi scholars tracing variants, etymological clues, and phonetic neighborhoods.</li>
+          <li>Instructors building reproducible exploration demos for classroom or seminar use.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>
+      <p>Readings for obscure glyph art emphasize Mandarin pinyin and selected Japanese forms where commonly cited.</p>
+    </footer>
+  </body>
+</html>
+
