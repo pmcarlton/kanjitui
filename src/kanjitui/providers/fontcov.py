@@ -104,16 +104,20 @@ def compute_font_coverage_from_path(font_path: Path) -> set[int] | None:
     return coverage
 
 
-def compute_font_coverage_with_path(font_spec: str) -> tuple[set[int] | None, Path | None]:
+def compute_font_coverage_with_path(
+    font_spec: str,
+) -> tuple[set[int] | None, Path | None, str | None]:
     font_path = resolve_font_path(font_spec)
     if font_path is None:
-        return None, None
+        return None, None, "font_not_found"
     coverage = compute_font_coverage_from_path(font_path)
-    return coverage, font_path
+    if coverage is None:
+        return None, font_path, "fonttools_unavailable"
+    return coverage, font_path, None
 
 
 def compute_font_coverage(font_spec: str) -> set[int] | None:
-    coverage, _font_path = compute_font_coverage_with_path(font_spec)
+    coverage, _font_path, _error = compute_font_coverage_with_path(font_spec)
     return coverage
 
 

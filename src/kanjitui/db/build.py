@@ -331,8 +331,13 @@ def build_database(
 
     coverage: set[int] | None = None
     if config.font:
-        coverage, resolved_font_path = compute_font_coverage_with_path(config.font)
+        coverage, resolved_font_path, coverage_error = compute_font_coverage_with_path(config.font)
         if coverage is None:
+            if coverage_error == "fonttools_unavailable":
+                raise RuntimeError(
+                    "Font coverage extraction requires 'fonttools'. "
+                    "Install it with: pip install fonttools"
+                )
             raise FileNotFoundError(
                 f"Font coverage unavailable for '{config.font}'. "
                 "Install the font (or pass a valid font path) before enabling font filter."

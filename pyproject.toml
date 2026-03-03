@@ -9,10 +9,10 @@ description = "Terminal explorer for Japanese/Chinese Han character data"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "kanjitui contributors" }]
-dependencies = []
+dependencies = ["fonttools>=4.0"]
 
 [project.optional-dependencies]
-build = ["fonttools>=4.0"]
+build = []
 test = ["pytest>=8.0"]
 gui = ["PySide6>=6.7"]
 

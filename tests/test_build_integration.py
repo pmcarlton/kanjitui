@@ -115,7 +115,29 @@ def test_build_fails_when_font_filter_is_unavailable(tmp_path: Path, monkeypatch
         ),
         font="Missing Font Family",
     )
-    monkeypatch.setattr("kanjitui.db.build.compute_font_coverage_with_path", lambda _font: (None, None))
+    monkeypatch.setattr("kanjitui.db.build.compute_font_coverage_with_path", lambda _font: (None, None, "font_not_found"))
 
     with pytest.raises(FileNotFoundError, match="Font coverage unavailable"):
+        _ = build_database(config)
+
+
+def test_build_fails_with_actionable_error_when_fonttools_is_missing(tmp_path: Path, monkeypatch) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    db_path = tmp_path / "db_fonttools.sqlite"
+    config = BuildConfig(
+        db_path=db_path,
+        paths=BuildPaths(
+            unihan_dir=fixtures / "unihan",
+            kanjidic2_xml=fixtures / "kanjidic2.xml",
+            jmdict_xml=fixtures / "jmdict.xml",
+            cedict_txt=fixtures / "cedict_ts.u8",
+        ),
+        font="BabelStone Han",
+    )
+    monkeypatch.setattr(
+        "kanjitui.db.build.compute_font_coverage_with_path",
+        lambda _font: (None, Path("/tmp/font.ttf"), "fonttools_unavailable"),
+    )
+
+    with pytest.raises(RuntimeError, match="pip install fonttools"):
         _ = build_database(config)
