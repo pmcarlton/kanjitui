@@ -268,10 +268,47 @@ pre {
 }
 
 footer {
-  text-align: center;
-  padding: 1rem 1rem 2.2rem;
-  color: #696556;
-  font-size: 0.88rem;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 0 1.4rem 2.2rem;
+  color: #555144;
+  font-size: 0.9rem;
+}
+
+.footer-ack {
+  border: 1px solid #d6cfbf;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.65);
+  box-shadow: var(--shadow);
+  padding: 1rem 1.1rem 1.1rem;
+}
+
+.footer-ack h2 {
+  margin: 0;
+  font-size: clamp(1.35rem, 2.1vw, 1.85rem);
+}
+
+.footer-ack p {
+  margin: 0.45rem 0 0.6rem;
+}
+
+.footer-ack ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.footer-ack li {
+  margin: 0.24rem 0;
+}
+
+.footer-ack a {
+  color: #0d6b8e;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(13, 107, 142, 0.5);
+}
+
+.footer-ack a:hover {
+  border-color: #0d6b8e;
 }
 
 .reveal {

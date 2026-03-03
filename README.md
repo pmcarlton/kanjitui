@@ -1,5 +1,7 @@
 # kanjitui
 
+[![GitHub Pages](https://img.shields.io/badge/docs-GitHub%20Pages-2ea44f?logo=github)](https://pmcarlton.github.io/kanjitui/)
+
 Terminal explorer for a font-safe subset of Han characters with Japanese and Chinese readings, glosses, and example words.
 
 ## Install
