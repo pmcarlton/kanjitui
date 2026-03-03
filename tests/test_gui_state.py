@@ -168,6 +168,7 @@ def test_gui_state_radical_results_follow_filters_and_include_names(tmp_path: Pa
         info = state.radical_info_line(85)
         assert "#85" in info
         assert "EN:Water" in info
-        assert "JP:" in info and "CN:" in info
+        assert "JP:さんずい" in info
+        assert "CN:三点水" in info
     finally:
         conn.close()

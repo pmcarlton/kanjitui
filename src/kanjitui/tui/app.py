@@ -27,8 +27,10 @@ from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
 from kanjitui.tui.radicals import (
     all_kangxi_radical_numbers,
     kangxi_radical_base_char,
+    kangxi_radical_cn_name,
     kangxi_radical_english_name,
     kangxi_radical_glyph,
+    kangxi_radical_jp_name,
 )
 from kanjitui.tui.router import KeyInput, KeyRouter
 from kanjitui.variant_nav import VariantTarget, build_variant_targets
@@ -247,16 +249,18 @@ class TuiApp:
             return cached
         base = kangxi_radical_base_char(radical)
         en = kangxi_radical_english_name(radical)
-        jp = "-"
-        cn = "-"
+        jp = kangxi_radical_jp_name(radical) or "-"
+        cn = kangxi_radical_cn_name(radical) or "-"
         if base != "?":
             base_cp = ord(base)
-            jp_reading = db_query.first_jp_reading(self.conn, base_cp)
-            cn_reading = db_query.first_cn_reading(self.conn, base_cp)
-            if jp_reading:
-                jp = jp_reading
-            if cn_reading:
-                cn = cn_reading
+            if jp == "-":
+                jp_reading = db_query.first_jp_reading(self.conn, base_cp)
+                if jp_reading:
+                    jp = jp_reading
+            if cn == "-":
+                cn_reading = db_query.first_cn_reading(self.conn, base_cp)
+                if cn_reading:
+                    cn = cn_reading
         info = (base, en, jp, cn)
         self._radical_name_cache[radical] = info
         return info
