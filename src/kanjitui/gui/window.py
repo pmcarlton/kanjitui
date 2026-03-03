@@ -109,18 +109,22 @@ class LiveTextDialog(QDialog):
         parent: QWidget | None = None,
         close_keys: set[str] | None = None,
         close_on_any_key: bool = False,
+        on_key: Callable[[QKeyEvent], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_close = on_close
         self._close_keys = close_keys or set()
         self._close_on_any_key = close_on_any_key
+        self._on_key = on_key
         self.setWindowTitle(title)
         self.resize(820, 420)
         self.setStyleSheet("QDialog { border: 2px solid #00a0ff; }")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QVBoxLayout(self)
         self.text = QPlainTextEdit(self)
         self.text.setReadOnly(True)
+        self.text.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.text.setFont(ui_font(self, 14))
         layout.addWidget(self.text)
 
@@ -130,6 +134,9 @@ class LiveTextDialog(QDialog):
     def set_close_behavior(self, close_keys: set[str] | None, close_on_any_key: bool) -> None:
         self._close_keys = close_keys or set()
         self._close_on_any_key = close_on_any_key
+
+    def set_on_key(self, on_key: Callable[[QKeyEvent], bool] | None) -> None:
+        self._on_key = on_key
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._on_close()
@@ -145,6 +152,9 @@ class LiveTextDialog(QDialog):
             return
         if text and text in self._close_keys:
             self.close()
+            return
+        if self._on_key is not None and self._on_key(event):
+            event.accept()
             return
         super().keyPressEvent(event)
 
@@ -1406,6 +1416,32 @@ class KanjiGuiWindow(QMainWindow):
         self.state.jump_to_cp(selected)
         return True
 
+    def _handle_phonetic_overlay_key(self, event: QKeyEvent) -> bool:
+        key = event.key()
+        if key == Qt.Key.Key_Up:
+            _ = self._move_related_selection_vertical(-1)
+            self.refresh_view()
+            return True
+        if key == Qt.Key.Key_Down:
+            _ = self._move_related_selection_vertical(+1)
+            self.refresh_view()
+            return True
+        if key == Qt.Key.Key_Home:
+            detail = self._current_detail()
+            rows = self._related_rows_for_detail(detail) if detail is not None else []
+            self.state.related_row_idx = 0 if rows else 0
+            self.state.related_col_idx = 0
+            self.refresh_view()
+            return True
+        if key == Qt.Key.Key_End:
+            detail = self._current_detail()
+            rows = self._related_rows_for_detail(detail) if detail is not None else []
+            self.state.related_row_idx = len(rows) - 1 if rows else 0
+            self.state.related_col_idx = 0
+            self.refresh_view()
+            return True
+        return False
+
     def _format_user_overlay(self, cp: int) -> list[str]:
         if self.state.user_store is None:
             return ["(user store unavailable)"]
@@ -1435,6 +1471,7 @@ class KanjiGuiWindow(QMainWindow):
         on_close: Callable[[], None] | None = None,
         close_keys: set[str] | None = None,
         close_on_any_key: bool = False,
+        on_key: Callable[[QKeyEvent], bool] | None = None,
     ) -> None:
         dlg = self._overlays.get(key)
         if not enabled:
@@ -1456,13 +1493,17 @@ class KanjiGuiWindow(QMainWindow):
                 self,
                 close_keys=close_keys,
                 close_on_any_key=close_on_any_key,
+                on_key=on_key,
             )
             dlg.show()
             self._overlays[key] = dlg
         dlg.setWindowTitle(title)
         dlg.set_close_behavior(close_keys=close_keys, close_on_any_key=close_on_any_key)
+        dlg.set_on_key(on_key)
         dlg.set_lines(lines)
         dlg.raise_()
+        dlg.activateWindow()
+        dlg.setFocus()
 
     def _sync_overlays(self, detail: dict) -> None:
         cp = int(detail["cp"])
@@ -1538,6 +1579,7 @@ class KanjiGuiWindow(QMainWindow):
             ph_lines,
             on_close=lambda: setattr(self.state, "show_phonetic", False),
             close_keys={"s", "S"},
+            on_key=self._handle_phonetic_overlay_key,
         )
 
         self._sync_overlay(

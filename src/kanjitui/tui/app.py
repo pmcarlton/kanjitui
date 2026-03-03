@@ -2319,16 +2319,18 @@ class TuiApp:
         box_w = w - 2
         self._draw_box(stdscr, top, left, box_h, box_w, title="Phonetic Series", accent=True)
         self._safe_add(stdscr, top + 1, left + 2, "s closes overlay")
-        series_rows = db_query.get_phonetic_series(self.conn, cp, limit=box_h - 3)
+        series_rows = db_query.get_phonetic_series(self.conn, cp, limit=120)
         if not series_rows:
             hint = "(no phonetic series rows)"
             if self.derived_counts.get("phonetic_series", 0) == 0:
                 hint = "(no phonetic rows; rebuild DB with current builder)"
             self._safe_add(stdscr, top + 2, left + 2, hint)
             return
-        for idx, (member_cp, member_ch, key, pinyin_marked, pinyin_numbered) in enumerate(
-            series_rows[: box_h - 3]
-        ):
+        max_rows = box_h - 3
+        start, end = visible_window(self.related_row_idx, len(series_rows), max_rows)
+        for offset, row in enumerate(series_rows[start:end]):
+            idx = start + offset
+            member_cp, member_ch, key, pinyin_marked, pinyin_numbered = row
             pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(
                 pinyin_numbered
             )
@@ -2336,7 +2338,7 @@ class TuiApp:
             text = f"{marker} {idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             if pinyin:
                 text += f"  {pinyin}"
-            self._safe_add(stdscr, top + 2 + idx, left + 2, text)
+            self._safe_add(stdscr, top + 2 + offset, left + 2, text)
 
     def _render_user_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
