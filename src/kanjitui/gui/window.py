@@ -338,7 +338,7 @@ class SetupDialog(QDialog):
         layout.addLayout(source_grid)
 
         self.font_filter_cb = QCheckBox(
-            f"Auto-build using font filter ({default_build_font()})",
+            f"Auto-build using font filter ({self.window._default_build_font_spec()})",
             self,
         )
         self.font_filter_cb.setChecked(False)
@@ -391,7 +391,7 @@ class SetupDialog(QDialog):
         ok = sum(1 for status in results.values() if status == "ok")
         fail = sum(1 for status in results.values() if status != "ok")
         self._append(f"Completed: ok={ok} failed={fail}")
-        setup_font = default_build_font() if self.font_filter_cb.isChecked() else None
+        setup_font = self.window._default_build_font_spec() if self.font_filter_cb.isChecked() else None
         self.window._after_setup_download(results, progress=_progress, font=setup_font)
         self.progress.setValue(total_steps)
         self._append(self.window.state.message)
@@ -420,7 +420,7 @@ class AdvancedRebuildDialog(QDialog):
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("Font:", self))
-        self.font_input = QLineEdit(default_build_font(), self)
+        self.font_input = QLineEdit(window._default_build_font_spec(), self)
         self.font_input.setFont(ui_font(self, 12))
         font_row.addWidget(self.font_input, 1)
         layout.addLayout(font_row)
@@ -1553,6 +1553,12 @@ class KanjiGuiWindow(QMainWindow):
 
     def _ack_lines(self) -> list[str]:
         return acknowledgements_for_sources(self._available_sources())
+
+    def _default_build_font_spec(self) -> str:
+        ui = (self.ui_font_family or "").strip()
+        if ui:
+            return ui
+        return default_build_font()
 
     def _after_setup_download(
         self,

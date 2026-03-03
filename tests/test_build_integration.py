@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db.query import connect, get_char_detail, get_provenance, search, variant_graph
 from kanjitui.db.query import (
@@ -99,10 +101,9 @@ def test_build_with_optional_sentences_provider(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_build_reports_when_font_filter_is_unavailable(tmp_path: Path, monkeypatch) -> None:
+def test_build_fails_when_font_filter_is_unavailable(tmp_path: Path, monkeypatch) -> None:
     fixtures = Path(__file__).parent / "fixtures"
     db_path = tmp_path / "db_font.sqlite"
-    logs: list[str] = []
 
     config = BuildConfig(
         db_path=db_path,
@@ -114,8 +115,7 @@ def test_build_reports_when_font_filter_is_unavailable(tmp_path: Path, monkeypat
         ),
         font="Missing Font Family",
     )
-    monkeypatch.setattr("kanjitui.db.build.compute_font_coverage", lambda _font: None)
-    counts = build_database(config, progress=logs.append)
+    monkeypatch.setattr("kanjitui.db.build.compute_font_coverage_with_path", lambda _font: (None, None))
 
-    assert counts["included"] >= 2
-    assert any("Font coverage unavailable" in line for line in logs)
+    with pytest.raises(FileNotFoundError, match="Font coverage unavailable"):
+        _ = build_database(config)

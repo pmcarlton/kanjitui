@@ -59,19 +59,22 @@ def _iter_font_name_candidates(font_spec: str) -> Iterable[str]:
                 yield value
 
 
-def compute_font_coverage(font_spec: str) -> set[int] | None:
+def resolve_font_path(font_spec: str) -> Path | None:
     font_path = Path(font_spec)
-    if not font_path.exists():
-        match = None
-        for candidate in _iter_font_name_candidates(font_spec):
-            match = next(_iter_font_paths(candidate), None)
-            if match is not None:
-                break
-        if match is None:
-            LOGGER.warning("font_not_found", extra={"font": font_spec})
-            return None
-        font_path = match
+    if font_path.exists():
+        return font_path
+    match = None
+    for candidate in _iter_font_name_candidates(font_spec):
+        match = next(_iter_font_paths(candidate), None)
+        if match is not None:
+            break
+    if match is None:
+        LOGGER.warning("font_not_found", extra={"font": font_spec})
+        return None
+    return match
 
+
+def compute_font_coverage_from_path(font_path: Path) -> set[int] | None:
     try:
         from fontTools.ttLib import TTFont  # type: ignore
     except Exception:
@@ -98,6 +101,19 @@ def compute_font_coverage(font_spec: str) -> set[int] | None:
             return coverage
         for table in font["cmap"].tables:
             coverage.update(table.cmap.keys())
+    return coverage
+
+
+def compute_font_coverage_with_path(font_spec: str) -> tuple[set[int] | None, Path | None]:
+    font_path = resolve_font_path(font_spec)
+    if font_path is None:
+        return None, None
+    coverage = compute_font_coverage_from_path(font_path)
+    return coverage, font_path
+
+
+def compute_font_coverage(font_spec: str) -> set[int] | None:
+    coverage, _font_path = compute_font_coverage_with_path(font_spec)
     return coverage
 
 

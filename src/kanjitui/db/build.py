@@ -12,7 +12,7 @@ from typing import Callable
 from kanjitui.db.migrations import rebuild_schema
 from kanjitui.models import CharAnnotations, CnWordEntry, JpWordEntry
 from kanjitui.providers.cedict import CEDICTEntry
-from kanjitui.providers.fontcov import compute_font_coverage, save_coverage_json
+from kanjitui.providers.fontcov import compute_font_coverage_with_path, save_coverage_json
 from kanjitui.providers.jmdict import JMDictEntry
 from kanjitui.providers.registry import ProviderRegistry, default_build_registry
 from kanjitui.search.normalize import (
@@ -331,14 +331,17 @@ def build_database(
 
     coverage: set[int] | None = None
     if config.font:
-        coverage = compute_font_coverage(config.font)
-        if coverage is not None:
-            if progress is not None:
-                progress(f"Font coverage ready: {len(coverage)} codepoints ({config.font})")
-            if coverage and config.font_profile_out:
-                save_coverage_json(config.font_profile_out, coverage, font=config.font)
-        elif progress is not None:
-            progress(f"Font coverage unavailable for '{config.font}'; skipping font filter")
+        coverage, resolved_font_path = compute_font_coverage_with_path(config.font)
+        if coverage is None:
+            raise FileNotFoundError(
+                f"Font coverage unavailable for '{config.font}'. "
+                "Install the font (or pass a valid font path) before enabling font filter."
+            )
+        if progress is not None:
+            resolved = str(resolved_font_path) if resolved_font_path is not None else config.font
+            progress(f"Font coverage ready: {len(coverage)} codepoints ({resolved})")
+        if coverage and config.font_profile_out:
+            save_coverage_json(config.font_profile_out, coverage, font=config.font)
 
     counts = {
         "candidates": len(merged),
