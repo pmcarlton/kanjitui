@@ -10,7 +10,7 @@ import webbrowser
 from typing import Callable
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -612,11 +612,19 @@ class RadicalDialog(QDialog):
 
         right = QVBoxLayout()
         panel.addLayout(right, 1)
+        self.radical_meta = QLabel(self)
+        self.radical_meta.setFont(ui_font(self, 12))
+        self.radical_meta.setWordWrap(True)
+        right.addWidget(self.radical_meta)
         stroke_row = QHBoxLayout()
         self.stroke_label = QLabel("strokes=all", self)
         self.stroke_label.setFont(ui_font(self, 12))
         self.stroke_prev = QPushButton("[", self)
         self.stroke_next = QPushButton("]", self)
+        for btn in (self.stroke_prev, self.stroke_next):
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         stroke_row.addWidget(self.stroke_label)
         stroke_row.addWidget(self.stroke_prev)
         stroke_row.addWidget(self.stroke_next)
@@ -639,10 +647,12 @@ class RadicalDialog(QDialog):
             item = QTableWidgetItem(kangxi_radical_glyph(radical))
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.grid.setItem(r, c, item)
+        self._refresh_grid_visuals()
 
         self.stroke_prev.clicked.connect(lambda: self._adjust_stroke(-1))
         self.stroke_next.clicked.connect(lambda: self._adjust_stroke(+1))
         self.grid.cellDoubleClicked.connect(lambda r, c: self._activate_radical_cell(r, c))
+        self.grid.currentCellChanged.connect(lambda *_: self._refresh_radical_meta())
         self.results.itemDoubleClicked.connect(lambda _: self.accept_selected())
         self.jump_btn.clicked.connect(self.accept_selected)
         self.cancel_btn.clicked.connect(self.reject)
@@ -650,6 +660,7 @@ class RadicalDialog(QDialog):
         start_row = self.state.radical_idx // self.state.radical_grid_cols
         start_col = self.state.radical_idx % self.state.radical_grid_cols
         self.grid.setCurrentCell(start_row, start_col)
+        self._refresh_radical_meta()
         self.grid.setFocus()
 
     def _radical_index_from_cell(self, row: int, col: int) -> int | None:
@@ -661,6 +672,13 @@ class RadicalDialog(QDialog):
     def _activate_radical_cell(self, row: int, col: int) -> None:
         idx = self._radical_index_from_cell(row, col)
         if idx is None:
+            return
+        radical = self.state.radical_numbers[idx]
+        if not self.state.radical_is_available(radical):
+            self.state.message = f"{self.state.radical_info_line(radical)}  (no matches under current filters)"
+            self.results.clear()
+            self.grid.setFocus()
+            self._refresh_radical_meta()
             return
         self.state.radical_pick(idx)
         self._refresh_results()
@@ -682,6 +700,35 @@ class RadicalDialog(QDialog):
             self.results.addItem(item)
         if self.results.count() > 0:
             self.results.setCurrentRow(0)
+        self._refresh_radical_meta()
+
+    def _refresh_grid_visuals(self) -> None:
+        for i, radical in enumerate(self.state.radical_numbers):
+            r = i // self.state.radical_grid_cols
+            c = i % self.state.radical_grid_cols
+            item = self.grid.item(r, c)
+            if item is None:
+                continue
+            if self.state.radical_is_available(radical):
+                item.setForeground(QBrush(QColor("#111111")))
+            else:
+                item.setForeground(QBrush(QColor("#9a9a9a")))
+
+    def _refresh_radical_meta(self) -> None:
+        if self.state.radical_selected is not None:
+            radical = self.state.radical_selected
+        else:
+            cell = self.grid.currentItem()
+            if cell is None:
+                self.radical_meta.setText("")
+                return
+            idx = self._radical_index_from_cell(cell.row(), cell.column())
+            if idx is None:
+                self.radical_meta.setText("")
+                return
+            radical = self.state.radical_numbers[idx]
+        suffix = "" if self.state.radical_is_available(radical) else "  (filtered out)"
+        self.radical_meta.setText(self.state.radical_info_line(radical) + suffix)
 
     def accept_selected(self) -> None:
         item = self.results.currentItem()
@@ -705,10 +752,10 @@ class RadicalDialog(QDialog):
                 if cell is not None:
                     self._activate_radical_cell(cell.row(), cell.column())
                     return
-        if text == "[":
+        if key == Qt.Key.Key_BracketLeft or text == "[":
             self._adjust_stroke(-1)
             return
-        if text == "]":
+        if key == Qt.Key.Key_BracketRight or text == "]":
             self._adjust_stroke(+1)
             return
         if key in (Qt.Key.Key_Backspace,):
@@ -718,6 +765,7 @@ class RadicalDialog(QDialog):
             self.state.radical_stroke_options = [None]
             self.state.radical_stroke_idx = 0
             self.stroke_label.setText("strokes=all")
+            self._refresh_radical_meta()
             self.grid.setFocus()
             return
         super().keyPressEvent(event)

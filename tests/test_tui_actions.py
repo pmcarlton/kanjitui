@@ -214,6 +214,31 @@ def test_no_reading_plus_filters_keeps_valid_current_glyph(tmp_path: Path) -> No
         conn.close()
 
 
+def test_radical_results_follow_current_filters(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        app.filter_state.has_sentences = "yes"
+        app._refresh_ordering()
+
+        app.radical_open = True
+        app.radical_idx = 84  # radical #85 (water)
+        assert app._handle_radical_key(10) is True
+        assert app.radical_selected == 85
+        assert app.radical_results == [0x6F22]
+
+        app.radical_results = None
+        app.radical_selected = None
+        app.radical_idx = 0  # radical #1 has no fixture matches
+        assert app._handle_radical_key(10) is True
+        assert app.radical_results is None
+        assert app.radical_selected is None
+        assert "no matches under current filters" in app.message
+    finally:
+        conn.close()
+
+
 def test_shift_s_opens_setup_and_s_toggles_phonetic(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)

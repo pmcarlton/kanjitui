@@ -9,7 +9,12 @@ from kanjitui.db.user import UserStore
 from kanjitui.filtering import FilterState, apply_filter_state
 from kanjitui.search.query import SearchEngine
 from kanjitui.tui.navigation import move_grid_index
-from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
+from kanjitui.tui.radicals import (
+    all_kangxi_radical_numbers,
+    kangxi_radical_base_char,
+    kangxi_radical_english_name,
+    kangxi_radical_glyph,
+)
 
 
 ORDERINGS = ["freq", "radical", "reading", "codepoint"]
@@ -31,6 +36,7 @@ class GuiState:
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
         self.filter_state = FilterState()
         self.filter_data = db_query.load_filter_data(self.conn)
+        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
 
         self.focus = "jp"
         self.panel_focus = "jp"
@@ -64,6 +70,8 @@ class GuiState:
         self.radical_selected: int | None = None
         self.radical_stroke_options: list[int | None] = [None]
         self.radical_stroke_idx = 0
+        self.radical_available_numbers: set[int] = set()
+        self._radical_name_cache: dict[int, tuple[str, str, str, str]] = {}
 
         self.message = "Ready"
         if self.derived_counts.get("field_provenance", 0) == 0:
@@ -73,12 +81,15 @@ class GuiState:
             self.conn, ORDERINGS[self.ordering_idx], self.focus, self.current_freq_profile
         )
         self.pos = 0
+        self._refresh_radical_availability()
 
     def reload_db_state(self, current_cp: int | None = None) -> None:
         self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
         self.derived_counts = db_query.derived_data_counts(self.conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
         self.filter_data = db_query.load_filter_data(self.conn)
+        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
+        self._radical_name_cache = {}
         self.freq_profiles = db_query.available_frequency_profiles(self.conn)
         if self.freq_profiles:
             self.freq_profile_idx = max(0, min(self.freq_profile_idx, len(self.freq_profiles) - 1))
@@ -147,6 +158,7 @@ class GuiState:
             default_frequency_profile=self.current_freq_profile,
         )
         self.ordered_cps = ordered
+        self._refresh_radical_availability()
         if current is None or not self.ordered_cps:
             self.pos = 0
             return
@@ -170,6 +182,48 @@ class GuiState:
             self.focus,
             self.current_freq_profile,
         )
+
+    def _refresh_radical_availability(self) -> None:
+        available: set[int] = set()
+        for cp in self.ordered_cps:
+            radical = self.cp_radical_map.get(cp)
+            if radical is not None:
+                available.add(radical)
+        self.radical_available_numbers = available
+
+    def radical_is_available(self, radical: int) -> bool:
+        return radical in self.radical_available_numbers
+
+    def radical_name_info(self, radical: int) -> tuple[str, str, str, str]:
+        cached = self._radical_name_cache.get(radical)
+        if cached is not None:
+            return cached
+        base = kangxi_radical_base_char(radical)
+        en = kangxi_radical_english_name(radical)
+        jp = "-"
+        cn = "-"
+        if base != "?":
+            base_cp = ord(base)
+            jp_reading = db_query.first_jp_reading(self.conn, base_cp)
+            cn_reading = db_query.first_cn_reading(self.conn, base_cp)
+            if jp_reading:
+                jp = jp_reading
+            if cn_reading:
+                cn = cn_reading
+        info = (base, en, jp, cn)
+        self._radical_name_cache[radical] = info
+        return info
+
+    def radical_info_line(self, radical: int) -> str:
+        base, en, jp, cn = self.radical_name_info(radical)
+        return f"#{radical} {kangxi_radical_glyph(radical)} ({base})  EN:{en}  JP:{jp}  CN:{cn}"
+
+    def _radical_filtered_results(self, radical: int, stroke_filter: int | None = None) -> list[int]:
+        rows = db_query.cps_by_radical(self.conn, radical, stroke_filter=stroke_filter)
+        if not rows:
+            return []
+        allowed = set(self.ordered_cps)
+        return [cp for cp in rows if cp in allowed]
 
     def preview_filter_count(self, state: FilterState) -> int:
         ordered = self.base_ordered_cps()
@@ -374,13 +428,21 @@ class GuiState:
         idx = max(0, min(index, len(self.radical_numbers) - 1))
         self.radical_idx = idx
         radical = self.radical_numbers[self.radical_idx]
+        if not self.radical_is_available(radical):
+            self.radical_selected = None
+            self.radical_results = None
+            self.radical_result_idx = 0
+            self.radical_stroke_options = [None]
+            self.radical_stroke_idx = 0
+            self.message = f"{self.radical_info_line(radical)}  (no matches under current filters)"
+            return
         self.radical_selected = radical
         strokes = db_query.stroke_options_by_radical(self.conn, radical)
         self.radical_stroke_options = [None] + strokes
         self.radical_stroke_idx = 0
-        self.radical_results = db_query.cps_by_radical(self.conn, radical, stroke_filter=None)
+        self.radical_results = self._radical_filtered_results(radical, stroke_filter=None)
         self.radical_result_idx = 0
-        self.message = f"Radical {kangxi_radical_glyph(radical)} selected"
+        self.message = f"{self.radical_info_line(radical)} selected"
 
     def radical_move_grid(self, direction: str) -> None:
         self.radical_idx = move_grid_index(
@@ -395,9 +457,7 @@ class GuiState:
             min(len(self.radical_stroke_options) - 1, self.radical_stroke_idx + delta),
         )
         stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
-        self.radical_results = db_query.cps_by_radical(
-            self.conn, self.radical_selected, stroke_filter=stroke_filter
-        )
+        self.radical_results = self._radical_filtered_results(self.radical_selected, stroke_filter=stroke_filter)
         self.radical_result_idx = 0
         self.message = f"Stroke filter: {stroke_filter if stroke_filter is not None else 'all'}"
 

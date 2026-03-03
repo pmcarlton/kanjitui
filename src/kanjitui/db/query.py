@@ -93,6 +93,49 @@ def reading_cp_sets(conn: sqlite3.Connection) -> tuple[set[int], set[int]]:
     return (jp, cn)
 
 
+def cp_to_radical_map(conn: sqlite3.Connection) -> dict[int, int]:
+    rows = conn.execute("SELECT cp, radical FROM chars WHERE radical IS NOT NULL").fetchall()
+    return {int(row[0]): int(row[1]) for row in rows}
+
+
+def first_jp_reading(conn: sqlite3.Connection, cp: int) -> str | None:
+    row = conn.execute(
+        """
+        SELECT reading
+        FROM jp_readings
+        WHERE cp = ?
+        ORDER BY CASE type WHEN 'on' THEN 0 WHEN 'kun' THEN 1 ELSE 2 END, reading
+        LIMIT 1
+        """,
+        (cp,),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row[0]) if row[0] else None
+
+
+def first_cn_reading(conn: sqlite3.Connection, cp: int) -> str | None:
+    row = conn.execute(
+        """
+        SELECT pinyin_marked, pinyin_numbered
+        FROM cn_readings
+        WHERE cp = ?
+        ORDER BY pinyin_numbered, pinyin_marked
+        LIMIT 1
+        """,
+        (cp,),
+    ).fetchone()
+    if row is None:
+        return None
+    marked = str(row[0] or "").strip()
+    numbered = str(row[1] or "").strip()
+    if marked:
+        return marked
+    if numbered:
+        return search_normalize.pinyin_numbered_to_marked(numbered)
+    return None
+
+
 def _kanjidic2_fallback_paths() -> list[Path]:
     candidates: list[Path] = []
     env_kanjidic2 = os.environ.get("KANJITUI_KANJIDIC2", "").strip()

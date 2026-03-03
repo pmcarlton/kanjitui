@@ -24,7 +24,12 @@ from kanjitui.setup_resources import (
 )
 from kanjitui.strokeorder import StrokeOrderData, StrokeOrderRepository, build_tui_stroke_frames
 from kanjitui.tui.navigation import build_strip, move_grid_index, visible_window
-from kanjitui.tui.radicals import all_kangxi_radical_numbers, kangxi_radical_glyph
+from kanjitui.tui.radicals import (
+    all_kangxi_radical_numbers,
+    kangxi_radical_base_char,
+    kangxi_radical_english_name,
+    kangxi_radical_glyph,
+)
 from kanjitui.tui.router import KeyInput, KeyRouter
 from kanjitui.variant_nav import VariantTarget, build_variant_targets
 
@@ -52,6 +57,7 @@ class TuiApp:
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(conn)
         self.filter_state = FilterState()
         self.filter_data = db_query.load_filter_data(conn)
+        self.cp_radical_map = db_query.cp_to_radical_map(conn)
 
         self.focus = "jp"
         self.panel_focus = "jp"
@@ -102,6 +108,8 @@ class TuiApp:
         self.radical_selected: int | None = None
         self.radical_stroke_options: list[int | None] = [None]
         self.radical_stroke_idx = 0
+        self.radical_available_numbers: set[int] = set()
+        self._radical_name_cache: dict[int, tuple[str, str, str, str]] = {}
         self._variant_cache_cp: int | None = None
         self._variant_graph: dict | None = None
         self._variant_targets: list[VariantTarget] = []
@@ -134,6 +142,7 @@ class TuiApp:
             self.show_startup_overlay = not self.user_store.get_flag("startup_seen", default=False)
         else:
             self.show_startup_overlay = True
+        self._refresh_radical_availability()
 
         self.router = KeyRouter(self._current_mode, self._handle_normal_key)
         self.router.register("search", self._handle_search_key)
@@ -202,6 +211,7 @@ class TuiApp:
             default_frequency_profile=self.current_freq_profile,
         )
         self.ordered_cps = ordered
+        self._refresh_radical_availability()
         if current is None or not self.ordered_cps:
             self.pos = 0
             return
@@ -219,6 +229,48 @@ class TuiApp:
                         self.pos = self.ordered_cps.index(candidate)
                         return
             self.pos = 0
+
+    def _refresh_radical_availability(self) -> None:
+        available: set[int] = set()
+        for cp in self.ordered_cps:
+            radical = self.cp_radical_map.get(cp)
+            if radical is not None:
+                available.add(radical)
+        self.radical_available_numbers = available
+
+    def _radical_is_available(self, radical: int) -> bool:
+        return radical in self.radical_available_numbers
+
+    def _radical_name_info(self, radical: int) -> tuple[str, str, str, str]:
+        cached = self._radical_name_cache.get(radical)
+        if cached is not None:
+            return cached
+        base = kangxi_radical_base_char(radical)
+        en = kangxi_radical_english_name(radical)
+        jp = "-"
+        cn = "-"
+        if base != "?":
+            base_cp = ord(base)
+            jp_reading = db_query.first_jp_reading(self.conn, base_cp)
+            cn_reading = db_query.first_cn_reading(self.conn, base_cp)
+            if jp_reading:
+                jp = jp_reading
+            if cn_reading:
+                cn = cn_reading
+        info = (base, en, jp, cn)
+        self._radical_name_cache[radical] = info
+        return info
+
+    def _radical_info_line(self, radical: int) -> str:
+        base, en, jp, cn = self._radical_name_info(radical)
+        return f"#{radical} {kangxi_radical_glyph(radical)} ({base})  EN:{en}  JP:{jp}  CN:{cn}"
+
+    def _radical_filtered_results(self, radical: int, stroke_filter: int | None = None) -> list[int]:
+        rows = db_query.cps_by_radical(self.conn, radical, stroke_filter=stroke_filter)
+        if not rows:
+            return []
+        allowed = set(self.ordered_cps)
+        return [cp for cp in rows if cp in allowed]
 
     def _jump_to_cp(self, cp: int) -> None:
         if cp in self.ordered_cps:
@@ -445,6 +497,8 @@ class TuiApp:
         self.derived_counts = db_query.derived_data_counts(self.conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
         self.filter_data = db_query.load_filter_data(self.conn)
+        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
+        self._radical_name_cache = {}
         self.freq_profiles = db_query.available_frequency_profiles(self.conn)
         if self.freq_profiles:
             self.freq_profile_idx = max(0, min(self.freq_profile_idx, len(self.freq_profiles) - 1))
@@ -1151,13 +1205,21 @@ class TuiApp:
                 return True
             if key in (10, 13, curses.KEY_ENTER) and self.radical_numbers:
                 radical = self.radical_numbers[self.radical_idx]
+                if not self._radical_is_available(radical):
+                    self.radical_selected = None
+                    self.radical_results = None
+                    self.radical_result_idx = 0
+                    self.radical_stroke_options = [None]
+                    self.radical_stroke_idx = 0
+                    self.message = f"{self._radical_info_line(radical)}  (no matches under current filters)"
+                    return True
                 self.radical_selected = radical
                 strokes = db_query.stroke_options_by_radical(self.conn, radical)
                 self.radical_stroke_options = [None] + strokes
                 self.radical_stroke_idx = 0
-                self.radical_results = db_query.cps_by_radical(self.conn, radical, stroke_filter=None)
+                self.radical_results = self._radical_filtered_results(radical, stroke_filter=None)
                 self.radical_result_idx = 0
-                self.message = f"Radical {kangxi_radical_glyph(radical)} selected"
+                self.message = f"{self._radical_info_line(radical)} selected"
                 return True
             return True
 
@@ -1179,9 +1241,7 @@ class TuiApp:
         if key == ord("[") and self.radical_selected is not None:
             self.radical_stroke_idx = max(0, self.radical_stroke_idx - 1)
             stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
-            self.radical_results = db_query.cps_by_radical(
-                self.conn, self.radical_selected, stroke_filter=stroke_filter
-            )
+            self.radical_results = self._radical_filtered_results(self.radical_selected, stroke_filter=stroke_filter)
             self.radical_result_idx = 0
             self.message = f"Stroke filter: {stroke_filter if stroke_filter is not None else 'all'}"
             return True
@@ -1190,9 +1250,7 @@ class TuiApp:
                 len(self.radical_stroke_options) - 1, self.radical_stroke_idx + 1
             )
             stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
-            self.radical_results = db_query.cps_by_radical(
-                self.conn, self.radical_selected, stroke_filter=stroke_filter
-            )
+            self.radical_results = self._radical_filtered_results(self.radical_selected, stroke_filter=stroke_filter)
             self.radical_result_idx = 0
             self.message = f"Stroke filter: {stroke_filter if stroke_filter is not None else 'all'}"
             return True
@@ -1703,18 +1761,29 @@ class TuiApp:
                     if idx == self.radical_idx:
                         cell = f"┊{glyph}┊"
                     attr = curses.A_BOLD if idx == self.radical_idx else 0
+                    if not self._radical_is_available(radical_num):
+                        attr |= curses.A_DIM
                     self._safe_add(stdscr, y, x, cell, attr)
             selected_radical = self.radical_numbers[self.radical_idx]
-            self._safe_add(stdscr, top + box_h - 2, left + 2, f"Selected: {kangxi_radical_glyph(selected_radical)}", curses.A_BOLD)
+            selected_text = self._radical_info_line(selected_radical)
+            self._safe_add(
+                stdscr,
+                top + box_h - 2,
+                left + 2,
+                selected_text[: max(0, box_w - 4)],
+                curses.A_BOLD,
+            )
             return
 
         stroke_filter = self.radical_stroke_options[self.radical_stroke_idx]
         stroke_label = "all" if stroke_filter is None else str(stroke_filter)
+        selected_radical = self.radical_selected or self.radical_numbers[self.radical_idx]
         self._safe_add(
             stdscr,
             top + 1,
             left + 2,
-            f"Radical results (Enter jump, Backspace back, [/] strokes={stroke_label})",
+            f"Radical results (Enter jump, Backspace back, [/] strokes={stroke_label})  {self._radical_info_line(selected_radical)}"
+            [: max(0, box_w - 4)],
         )
         max_rows = box_h - 3
         start = max(0, self.radical_result_idx - max_rows + 1)

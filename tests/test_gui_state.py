@@ -149,3 +149,25 @@ def test_gui_state_filter_fallback_uses_final_filtered_order(tmp_path: Path) -> 
         assert all(cp in state.filter_data.sentences_cps for cp in state.ordered_cps)
     finally:
         conn.close()
+
+
+def test_gui_state_radical_results_follow_filters_and_include_names(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        state = GuiState(conn)
+        state.set_filter_state(FilterState(has_sentences="yes"))
+
+        assert state.radical_is_available(85) is True
+        assert state.radical_is_available(1) is False
+
+        state.radical_pick(84)  # radical #85 (water)
+        assert state.radical_selected == 85
+        assert state.radical_results == [0x6F22]
+
+        info = state.radical_info_line(85)
+        assert "#85" in info
+        assert "EN:Water" in info
+        assert "JP:" in info and "CN:" in info
+    finally:
+        conn.close()
