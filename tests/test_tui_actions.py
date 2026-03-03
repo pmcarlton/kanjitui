@@ -7,7 +7,7 @@ from kanjitui.db import query as db_query
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db.query import connect
 from kanjitui.db.user import UserStore
-from kanjitui.tui.app import TuiApp
+from kanjitui.tui.app import KEY_SHIFT_LEFT, KEY_SHIFT_RIGHT, TuiApp
 
 
 def _build_fixture_db(tmp_path: Path) -> Path:
@@ -391,6 +391,19 @@ def test_up_down_select_related_and_enter_jumps(tmp_path: Path) -> None:
         if "Related:" in app.message:
             assert app._handle_normal_key(10) is True
             assert app.current_cp != start_cp
+    finally:
+        conn.close()
+
+
+def test_tui_decodes_shift_arrow_escape_sequences(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        assert app._decode_escape_sequence("[1;2C") == KEY_SHIFT_RIGHT
+        assert app._decode_escape_sequence("[1;2D") == KEY_SHIFT_LEFT
+        assert app._decode_escape_sequence("[C") == curses.KEY_RIGHT
+        assert app._decode_escape_sequence("[A") == curses.KEY_UP
     finally:
         conn.close()
 

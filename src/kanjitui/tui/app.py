@@ -43,10 +43,10 @@ from kanjitui.variant_nav import VariantTarget, build_variant_targets
 
 
 ORDERINGS = ["freq", "radical", "reading", "codepoint"]
-KEY_SHIFT_DOWN = getattr(curses, "KEY_SF", -1)
-KEY_SHIFT_UP = getattr(curses, "KEY_SR", -1)
-KEY_SHIFT_LEFT = getattr(curses, "KEY_SLEFT", -1)
-KEY_SHIFT_RIGHT = getattr(curses, "KEY_SRIGHT", -1)
+KEY_SHIFT_DOWN = getattr(curses, "KEY_SF", 0x11001)
+KEY_SHIFT_UP = getattr(curses, "KEY_SR", 0x11002)
+KEY_SHIFT_LEFT = getattr(curses, "KEY_SLEFT", 0x11003)
+KEY_SHIFT_RIGHT = getattr(curses, "KEY_SRIGHT", 0x11004)
 
 
 class TuiApp:
@@ -135,6 +135,7 @@ class TuiApp:
         self.stroke_canvas_dims = (0, 0)
         self._stdscr: curses.window | None = None
         self._rebuild_in_progress = False
+        self._pending_keys: list[KeyInput] = []
         self.show_ack_overlay = False
         self.show_startup_overlay = False
         self.setup_open = False
@@ -864,12 +865,69 @@ class TuiApp:
             self._tick_stroke_animation(stdscr)
             self._render(stdscr)
             stdscr.timeout(self._input_timeout_ms())
-            try:
-                key = stdscr.get_wch()
-            except curses.error:
+            key = self._read_key(stdscr)
+            if key is None:
                 continue
             if not self._handle_key(key):
                 break
+
+    @staticmethod
+    def _decode_escape_sequence(seq: str) -> KeyInput | None:
+        mapping: dict[str, KeyInput] = {
+            "[A": curses.KEY_UP,
+            "[B": curses.KEY_DOWN,
+            "[C": curses.KEY_RIGHT,
+            "[D": curses.KEY_LEFT,
+            "OA": curses.KEY_UP,
+            "OB": curses.KEY_DOWN,
+            "OC": curses.KEY_RIGHT,
+            "OD": curses.KEY_LEFT,
+            "[1;2A": KEY_SHIFT_UP,
+            "[1;2B": KEY_SHIFT_DOWN,
+            "[1;2C": KEY_SHIFT_RIGHT,
+            "[1;2D": KEY_SHIFT_LEFT,
+        }
+        return mapping.get(seq)
+
+    def _read_key(self, stdscr: curses.window) -> KeyInput | None:
+        if self._pending_keys:
+            key = self._pending_keys.pop(0)
+            return key
+        try:
+            key = stdscr.get_wch()
+        except curses.error:
+            return None
+        if key != "\x1b":
+            return key
+
+        saved_timeout = self._input_timeout_ms()
+        seq_chars: list[str] = []
+        stdscr.timeout(25)
+        try:
+            for _ in range(10):
+                try:
+                    nxt = stdscr.get_wch()
+                except curses.error:
+                    break
+                if isinstance(nxt, int):
+                    if not seq_chars:
+                        return nxt
+                    break
+                seq_chars.append(nxt)
+                if nxt.isalpha() or nxt == "~":
+                    break
+        finally:
+            stdscr.timeout(saved_timeout)
+
+        if not seq_chars:
+            return 27
+        seq = "".join(seq_chars)
+        decoded = self._decode_escape_sequence(seq)
+        if decoded is not None:
+            return decoded
+
+        self._pending_keys.extend(seq_chars)
+        return 27
 
     def _current_mode(self) -> str:
         if self.show_ack_overlay:
