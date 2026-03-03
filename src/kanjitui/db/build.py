@@ -332,8 +332,13 @@ def build_database(
     coverage: set[int] | None = None
     if config.font:
         coverage = compute_font_coverage(config.font)
-        if coverage and config.font_profile_out:
-            save_coverage_json(config.font_profile_out, coverage, font=config.font)
+        if coverage is not None:
+            if progress is not None:
+                progress(f"Font coverage ready: {len(coverage)} codepoints ({config.font})")
+            if coverage and config.font_profile_out:
+                save_coverage_json(config.font_profile_out, coverage, font=config.font)
+        elif progress is not None:
+            progress(f"Font coverage unavailable for '{config.font}'; skipping font filter")
 
     counts = {
         "candidates": len(merged),

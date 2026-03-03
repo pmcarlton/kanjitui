@@ -97,3 +97,25 @@ def test_build_with_optional_sentences_provider(tmp_path: Path) -> None:
         assert any(row[0] == "jp" for row in rows)
     finally:
         conn.close()
+
+
+def test_build_reports_when_font_filter_is_unavailable(tmp_path: Path, monkeypatch) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    db_path = tmp_path / "db_font.sqlite"
+    logs: list[str] = []
+
+    config = BuildConfig(
+        db_path=db_path,
+        paths=BuildPaths(
+            unihan_dir=fixtures / "unihan",
+            kanjidic2_xml=fixtures / "kanjidic2.xml",
+            jmdict_xml=fixtures / "jmdict.xml",
+            cedict_txt=fixtures / "cedict_ts.u8",
+        ),
+        font="Missing Font Family",
+    )
+    monkeypatch.setattr("kanjitui.db.build.compute_font_coverage", lambda _font: None)
+    counts = build_database(config, progress=logs.append)
+
+    assert counts["included"] >= 2
+    assert any("Font coverage unavailable" in line for line in logs)

@@ -125,6 +125,7 @@ class TuiApp:
         self.stroke_done = False
         self.stroke_canvas_dims = (0, 0)
         self._stdscr: curses.window | None = None
+        self._rebuild_in_progress = False
         self.show_ack_overlay = False
         self.show_startup_overlay = False
         self.setup_open = False
@@ -464,7 +465,7 @@ class TuiApp:
             self.setup_logs.append(msg)
             if len(self.setup_logs) > 120:
                 self.setup_logs = self.setup_logs[-120:]
-            if self._stdscr is not None:
+            if self._stdscr is not None and not self._rebuild_in_progress:
                 try:
                     self._render(self._stdscr)
                 except curses.error:
@@ -506,6 +507,7 @@ class TuiApp:
             return False
         current_cp = self.current_cp
         logs.append("Starting automatic DB rebuild ...")
+        self._rebuild_in_progress = True
         try:
             try:
                 self.conn.close()
@@ -522,6 +524,7 @@ class TuiApp:
             logs.append(f"Automatic DB rebuild failed: {exc}")
             return False
         finally:
+            self._rebuild_in_progress = False
             self.conn = connect_db(db_path)
             self._reload_db_state(current_cp=current_cp)
 
@@ -1077,7 +1080,7 @@ class TuiApp:
             self.advanced_logs.append(msg)
             if len(self.advanced_logs) > 140:
                 self.advanced_logs = self.advanced_logs[-140:]
-            if self._stdscr is not None:
+            if self._stdscr is not None and not self._rebuild_in_progress:
                 try:
                     self._render(self._stdscr)
                 except curses.error:

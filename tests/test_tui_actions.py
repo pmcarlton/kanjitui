@@ -344,6 +344,35 @@ def test_setup_download_passes_default_font_when_font_filter_enabled(tmp_path: P
         app.conn.close()
 
 
+def test_setup_rebuild_progress_does_not_render_while_db_is_closed(tmp_path: Path, monkeypatch) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    app = TuiApp(conn)
+    app.setup_selected = {"unihan"}
+    app._stdscr = object()  # enable render path in setup progress callback
+    render_calls: list[str] = []
+
+    def fake_download_selected_sources(selected, paths, progress):
+        return {"unihan": "ok"}
+
+    def fake_render(_stdscr) -> None:
+        render_calls.append("render")
+
+    def fake_rebuild_database_from_sources(paths, db_path, progress, font=None):
+        progress("build progress")
+        return {"included": 1, "excluded_font": 0}
+
+    monkeypatch.setattr("kanjitui.tui.app.download_selected_sources", fake_download_selected_sources)
+    monkeypatch.setattr("kanjitui.tui.app.rebuild_database_from_sources", fake_rebuild_database_from_sources)
+    monkeypatch.setattr(app, "_render", fake_render)
+
+    app._run_setup_download()
+    try:
+        assert render_calls == []
+    finally:
+        app.conn.close()
+
+
 def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)

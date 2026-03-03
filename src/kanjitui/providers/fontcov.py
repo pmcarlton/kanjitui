@@ -7,6 +7,7 @@ from typing import Iterable
 
 
 LOGGER = logging.getLogger(__name__)
+FONT_EXTENSIONS = (".ttf", ".otf", ".ttc", ".otc")
 
 
 def _iter_font_paths(font_name: str) -> Iterable[Path]:
@@ -21,18 +22,34 @@ def _iter_font_paths(font_name: str) -> Iterable[Path]:
     for base in candidates:
         if not base.exists():
             continue
-        for path in base.rglob("*.ttf"):
-            if needle in path.stem.lower().replace(" ", ""):
-                yield path
-        for path in base.rglob("*.otf"):
-            if needle in path.stem.lower().replace(" ", ""):
-                yield path
+        for ext in FONT_EXTENSIONS:
+            for path in base.rglob(f"*{ext}"):
+                if needle in path.stem.lower().replace(" ", ""):
+                    yield path
+
+
+def _iter_font_name_candidates(font_spec: str) -> Iterable[str]:
+    base = font_spec.strip()
+    if not base:
+        return
+    yield base
+    normalized = base.lower()
+    if "cjk" not in normalized:
+        return
+    if normalized.endswith((" jp", " sc", " tc", " kr", " hk")):
+        return
+    for suffix in (" JP", " SC", " TC", " KR", " HK"):
+        yield base + suffix
 
 
 def compute_font_coverage(font_spec: str) -> set[int] | None:
     font_path = Path(font_spec)
     if not font_path.exists():
-        match = next(_iter_font_paths(font_spec), None)
+        match = None
+        for candidate in _iter_font_name_candidates(font_spec):
+            match = next(_iter_font_paths(candidate), None)
+            if match is not None:
+                break
         if match is None:
             LOGGER.warning("font_not_found", extra={"font": font_spec})
             return None
@@ -45,7 +62,23 @@ def compute_font_coverage(font_spec: str) -> set[int] | None:
         return None
 
     coverage: set[int] = set()
+    if font_path.suffix.lower() in (".ttc", ".otc"):
+        try:
+            from fontTools.ttLib import TTCollection  # type: ignore
+        except Exception:
+            LOGGER.warning("fonttools_unavailable")
+            return None
+        with TTCollection(font_path) as collection:
+            for member in collection.fonts:
+                if "cmap" not in member:
+                    continue
+                for table in member["cmap"].tables:
+                    coverage.update(table.cmap.keys())
+        return coverage
+
     with TTFont(font_path) as font:
+        if "cmap" not in font:
+            return coverage
         for table in font["cmap"].tables:
             coverage.update(table.cmap.keys())
     return coverage
