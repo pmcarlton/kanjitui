@@ -1,0 +1,19 @@
+site_name: kanjitui / kanjigui User Manual
+site_description: User manual for terminal and desktop Han character exploration modes.
+theme:
+  name: mkdocs
+nav:
+  - Overview: index.md
+  - Getting Started:
+      - Install and First Run: getting-started.md
+      - Build and Font Filter: build-font-filter.md
+  - Reference:
+      - TUI Menu and Keys: tui-reference.md
+      - GUI Menu and Keys: gui-reference.md
+      - Search, Filters, and Data Features: capabilities.md
+  - Workflows:
+      - Use Cases: use-cases.md
+  - Stubs and Roadmap:
+      - Documentation Stubs: stubs.md
+      - TODO Stubs: todo-stubs.md
+
