@@ -117,12 +117,18 @@ class LiveTextDialog(QDialog):
         self._close_on_any_key = close_on_any_key
         self.setWindowTitle(title)
         self.resize(820, 420)
+        self.setStyleSheet("QDialog { border: 2px solid #00a0ff; }")
 
         layout = QVBoxLayout(self)
+        self.hint = QLabel(self)
+        self.hint.setFont(ui_font(self, 12, QFont.Weight.Bold))
+        self.hint.setStyleSheet("color: #006a9c;")
+        layout.addWidget(self.hint)
         self.text = QPlainTextEdit(self)
         self.text.setReadOnly(True)
         self.text.setFont(ui_font(self, 14))
         layout.addWidget(self.text)
+        self._update_hint()
 
     def set_lines(self, lines: list[str]) -> None:
         self.text.setPlainText("\n".join(lines))
@@ -130,6 +136,17 @@ class LiveTextDialog(QDialog):
     def set_close_behavior(self, close_keys: set[str] | None, close_on_any_key: bool) -> None:
         self._close_keys = close_keys or set()
         self._close_on_any_key = close_on_any_key
+        self._update_hint()
+
+    def _update_hint(self) -> None:
+        if self._close_on_any_key:
+            self.hint.setText("Input focus: this overlay window (any key or Esc closes)")
+            return
+        if self._close_keys:
+            keys = ", ".join(sorted(self._close_keys))
+            self.hint.setText(f"Input focus: this overlay window (Esc or {keys} closes)")
+            return
+        self.hint.setText("Input focus: this overlay window (Esc closes)")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._on_close()
@@ -1097,10 +1114,18 @@ class KanjiGuiWindow(QMainWindow):
         self.menu_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         grid.addWidget(self.menu_label, 3, 0, 1, 2)
 
+        self.context_label = QLabel(self)
+        self.context_label.setFont(ui_font(self, 13, QFont.Weight.Bold))
+        self.context_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.context_label.setStyleSheet(
+            "QLabel { color: #005f8a; background: #e9f7ff; border: 1px solid #9ddcff; padding: 3px 6px; }"
+        )
+        grid.addWidget(self.context_label, 4, 0, 1, 2)
+
         self.status_label = QLabel(self)
         self.status_label.setFont(ui_font(self, 14))
         self.status_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        grid.addWidget(self.status_label, 4, 0, 1, 2)
+        grid.addWidget(self.status_label, 5, 0, 1, 2)
 
         grid.setColumnStretch(0, 4)
         grid.setColumnStretch(1, 1)
@@ -1196,8 +1221,31 @@ class KanjiGuiWindow(QMainWindow):
 
     def _focus_style(self, active: bool) -> str:
         if active:
-            return "QGroupBox{border:3px double #444; margin-top: 8px;} QGroupBox::title{subcontrol-origin: margin; left: 8px; padding:0 3px;}"
-        return "QGroupBox{border:1px solid #666; margin-top: 8px;} QGroupBox::title{subcontrol-origin: margin; left: 8px; padding:0 3px;}"
+            return (
+                "QGroupBox{border:3px double #00a0ff; margin-top: 8px; background: #f6fbff;}"
+                "QGroupBox::title{subcontrol-origin: margin; left: 8px; padding:0 3px; color:#007bb8; font-weight:700;}"
+            )
+        return (
+            "QGroupBox{border:1px solid #666; margin-top: 8px;}"
+            "QGroupBox::title{subcontrol-origin: margin; left: 8px; padding:0 3px;}"
+        )
+
+    def _active_input_context(self) -> str:
+        if self.show_startup_overlay:
+            return "Input: Startup overlay (any key dismisses)"
+        if self.show_ack_overlay:
+            return "Input: Acknowledgements overlay (Shift-A / Esc)"
+        if self.state.show_help:
+            return "Input: Main view + Help overlay"
+        if self.state.show_provenance:
+            return "Input: Main view + Provenance overlay"
+        if self.state.show_components:
+            return "Input: Main view + Components overlay"
+        if self.state.show_phonetic:
+            return "Input: Main view + Phonetic overlay"
+        if self.state.show_user_overlay:
+            return "Input: Main view + User overlay"
+        return f"Input: Main view (panel focus: {self.state.panel_focus.upper()})"
 
     @staticmethod
     def _mark_selected_glyph(text: str, selected_cp: int | None) -> str:
@@ -1532,6 +1580,7 @@ class KanjiGuiWindow(QMainWindow):
             self._set_panel_text(self.cn_text, [])
             self._set_panel_text(self.sent_text, [])
             self._set_panel_text(self.var_text, [])
+            self.context_label.setText(self._active_input_context())
             self.status_label.setText(self.state.message)
             fake_detail = {"cp": 0}
             self._sync_overlays(fake_detail)
@@ -1681,6 +1730,7 @@ class KanjiGuiWindow(QMainWindow):
             menu_line += "  Stroke:t"
         menu_line += "  Help:?  Quit:q"
         self.menu_label.setText(menu_line)
+        self.context_label.setText(self._active_input_context())
         self.status_label.setText(self.state.message)
 
         self._sync_overlays(detail)

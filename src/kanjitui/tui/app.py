@@ -47,6 +47,7 @@ KEY_SHIFT_DOWN = getattr(curses, "KEY_SF", 0x11001)
 KEY_SHIFT_UP = getattr(curses, "KEY_SR", 0x11002)
 KEY_SHIFT_LEFT = getattr(curses, "KEY_SLEFT", 0x11003)
 KEY_SHIFT_RIGHT = getattr(curses, "KEY_SRIGHT", 0x11004)
+COLOR_PAIR_ACCENT = 1
 
 
 class TuiApp:
@@ -136,6 +137,8 @@ class TuiApp:
         self._stdscr: curses.window | None = None
         self._rebuild_in_progress = False
         self._pending_keys: list[KeyInput] = []
+        self._colors_initialized = False
+        self._accent_attr = curses.A_BOLD
         self.show_ack_overlay = False
         self.show_startup_overlay = False
         self.setup_open = False
@@ -860,6 +863,7 @@ class TuiApp:
     def run(self, stdscr: curses.window) -> None:
         self._stdscr = stdscr
         stdscr.keypad(True)
+        self._init_colors()
         while True:
             self._set_cursor_visibility()
             self._tick_stroke_animation(stdscr)
@@ -870,6 +874,20 @@ class TuiApp:
                 continue
             if not self._handle_key(key):
                 break
+
+    def _init_colors(self) -> None:
+        if self._colors_initialized:
+            return
+        self._colors_initialized = True
+        try:
+            if not curses.has_colors():
+                return
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(COLOR_PAIR_ACCENT, curses.COLOR_CYAN, -1)
+            self._accent_attr = curses.color_pair(COLOR_PAIR_ACCENT) | curses.A_BOLD
+        except curses.error:
+            self._accent_attr = curses.A_BOLD
 
     @staticmethod
     def _decode_escape_sequence(seq: str) -> KeyInput | None:
@@ -949,6 +967,41 @@ class TuiApp:
         if self.bookmark_open:
             return "bookmark"
         return "normal"
+
+    def _active_input_context(self) -> str:
+        mode = self._current_mode()
+        if mode == "ack":
+            if self.show_startup_overlay:
+                return "Startup overlay (any key dismisses)"
+            return "Acknowledgements overlay (Esc/Shift-A)"
+        if mode == "setup":
+            return "Setup overlay"
+        if mode == "advanced":
+            return "Advanced rebuild overlay"
+        if mode == "filter":
+            return "Filter overlay"
+        if mode == "stroke":
+            return "Stroke animation overlay (Esc)"
+        if mode == "search":
+            return "Search overlay"
+        if mode == "radical":
+            return "Radical browser overlay"
+        if mode == "note":
+            return "Note editor overlay"
+        if mode == "bookmark":
+            return "Bookmarks overlay"
+
+        if self.show_help:
+            return "Main view + Help overlay"
+        if self.show_provenance:
+            return "Main view + Provenance overlay"
+        if self.show_components:
+            return "Main view + Components overlay"
+        if self.show_phonetic:
+            return "Main view + Phonetic overlay"
+        if self.show_user_overlay:
+            return "Main view + User overlay"
+        return f"Main view (panel focus: {self.panel_focus.upper()})"
 
     def _handle_key(self, key: KeyInput) -> bool:
         return self.router.dispatch(key)
@@ -1763,6 +1816,7 @@ class TuiApp:
         width: int,
         title: str = "",
         double: bool = False,
+        accent: bool = False,
     ) -> None:
         if height < 2 or width < 2:
             return
@@ -1773,7 +1827,7 @@ class TuiApp:
         else:
             tl, hz, tr, vt, bl, br = "┌", "─", "┐", "│", "└", "┘"
 
-        border_attr = curses.A_BOLD
+        border_attr = self._accent_attr if accent else curses.A_BOLD
         self._safe_add(stdscr, top, left, tl + (hz * (width - 2)) + tr, border_attr)
         for y in range(top + 1, bottom):
             self._safe_add(stdscr, y, left, vt, border_attr)
@@ -1782,14 +1836,15 @@ class TuiApp:
         self._safe_add(stdscr, bottom, left, bl + (hz * (width - 2)) + br, border_attr)
         if title and width > 6:
             banner = f" {title} "
-            self._safe_add(stdscr, top, left + 2, banner[: max(0, width - 4)], curses.A_BOLD)
+            title_attr = self._accent_attr if accent else curses.A_BOLD
+            self._safe_add(stdscr, top, left + 2, banner[: max(0, width - 4)], title_attr)
 
     def _render_section(self, stdscr: curses.window, y: int, width: int, title: str, lines: list[str], highlighted: bool = False) -> int:
         inner_width = max(10, width - 1)
         box_h = len(lines) + 2
         if y + box_h >= stdscr.getmaxyx()[0] - 4:
             return y
-        self._draw_box(stdscr, y, 0, box_h, inner_width, title=title, double=highlighted)
+        self._draw_box(stdscr, y, 0, box_h, inner_width, title=title, double=highlighted, accent=highlighted)
         for idx, line in enumerate(lines):
             self._safe_add(stdscr, y + 1 + idx, 2, line[: max(0, inner_width - 4)])
         return y + box_h
@@ -1810,6 +1865,7 @@ class TuiApp:
                     "Setup:S  Advanced:R  Filter:f  Ack:A  Help:?  Quit:q  (build DB after downloading: kanjitui --build --data-dir "
                     f"{self.runtime_paths.data_dir})"
                 )
+            self._safe_add(stdscr, h - 3, 0, f"Input: {self._active_input_context()}", self._accent_attr)
             self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
             self._safe_add(stdscr, h - 1, 0, self.message, curses.A_BOLD)
             if self.show_help:
@@ -1960,6 +2016,7 @@ class TuiApp:
         if stroke_available:
             menu_line += "  Stroke:t"
         menu_line += "  Help:?  Quit:q"
+        self._safe_add(stdscr, h - 3, 0, f"Input: {self._active_input_context()}", self._accent_attr)
         self._safe_add(stdscr, h - 2, 0, menu_line, curses.A_BOLD)
         status = self.message
         self._safe_add(stdscr, h - 1, 0, status, curses.A_BOLD)
@@ -2029,7 +2086,7 @@ class TuiApp:
         top = max(1, (h - box_h) // 2)
         left = max(1, (w - box_w) // 2)
 
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Help")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Help", accent=True)
         for i, line in enumerate(lines):
             self._safe_add(stdscr, top + 1 + i, left + 2, line)
 
@@ -2040,7 +2097,7 @@ class TuiApp:
         left = 1
         box_w = w - 2
 
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Search")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Search", accent=True)
 
         self._safe_add(stdscr, top + 1, left + 2, f"Query: {self.search_input}")
         self._safe_add(
@@ -2061,7 +2118,7 @@ class TuiApp:
                 f"{marker} {row['ch']} U+{row['cp']:04X}  JP:{row['jp']}  "
                 f"CN:{row['cn']}  {row['gloss']}"
             )
-            row_attr = curses.A_BOLD if idx == self.search_idx else 0
+            row_attr = self._accent_attr if idx == self.search_idx else 0
             self._safe_add(stdscr, top + 3 + offset, left + 2, text, row_attr)
         if self.search_results:
             self._safe_add(
@@ -2083,7 +2140,7 @@ class TuiApp:
         left = 1
         box_w = w - 2
 
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Radicals")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Radicals", accent=True)
 
         if self.radical_results is None:
             self._safe_add(
@@ -2110,7 +2167,7 @@ class TuiApp:
                     x = left + 2 + col * 4
                     if idx == self.radical_idx:
                         cell = f"┊{glyph}┊"
-                    attr = curses.A_BOLD if idx == self.radical_idx else 0
+                    attr = self._accent_attr if idx == self.radical_idx else 0
                     if not self._radical_is_available(radical_num):
                         attr |= curses.A_DIM
                     self._safe_add(stdscr, y, x, cell, attr)
@@ -2121,7 +2178,7 @@ class TuiApp:
                 top + box_h - 2,
                 left + 2,
                 selected_text[: max(0, box_w - 4)],
-                curses.A_BOLD,
+                self._accent_attr,
             )
             return
 
@@ -2140,7 +2197,7 @@ class TuiApp:
         for offset, cp in enumerate(self.radical_results[start : start + max_rows]):
             idx = start + offset
             marker = ">" if idx == self.radical_result_idx else " "
-            row_attr = curses.A_BOLD if idx == self.radical_result_idx else 0
+            row_attr = self._accent_attr if idx == self.radical_result_idx else 0
             self._safe_add(stdscr, top + 2 + offset, left + 2, f"{marker} {chr(cp)} U+{cp:04X}", row_attr)
 
     def _render_nav_strip(self, stdscr: curses.window, y: int) -> None:
@@ -2156,9 +2213,7 @@ class TuiApp:
             text = "· "
             if cell.cp is not None:
                 text = f"{chr(cell.cp)} "
-            attr = curses.A_BOLD if cell.is_current else curses.A_DIM
-            if cell.is_current:
-                attr |= curses.A_REVERSE
+            attr = self._accent_attr if cell.is_current else curses.A_DIM
             self._safe_add(stdscr, y, x, text, attr)
 
     def _render_provenance_overlay(self, stdscr: curses.window, cp: int) -> None:
@@ -2167,7 +2222,7 @@ class TuiApp:
         top = max(1, (h - box_h) // 2)
         left = 1
         box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Provenance")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Provenance", accent=True)
 
         rows = db_query.get_provenance(self.conn, cp, limit=box_h - 3)
         self._safe_add(stdscr, top + 1, left + 2, "p closes overlay")
@@ -2187,7 +2242,7 @@ class TuiApp:
         top = max(1, (h - box_h) // 2)
         left = 1
         box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Components")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Components", accent=True)
         self._safe_add(stdscr, top + 1, left + 2, "c closes overlay")
         components = db_query.get_components(self.conn, cp)
         if not components:
@@ -2211,7 +2266,7 @@ class TuiApp:
         top = max(1, (h - box_h) // 2)
         left = 1
         box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Phonetic Series")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Phonetic Series", accent=True)
         self._safe_add(stdscr, top + 1, left + 2, "s closes overlay")
         series_rows = db_query.get_phonetic_series(self.conn, cp, limit=box_h - 3)
         if not series_rows:
@@ -2238,7 +2293,7 @@ class TuiApp:
         top = max(1, (h - box_h) // 2)
         left = 1
         box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="User Workspace")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="User Workspace", accent=True)
         self._safe_add(stdscr, top + 1, left + 2, "u closes overlay")
         if self.user_store is None:
             self._safe_add(stdscr, top + 2, left + 2, "(user store unavailable)")
@@ -2297,7 +2352,7 @@ class TuiApp:
         left = 1
         box_w = w - 2
         title = "Glyph Note" if self.note_target == "glyph" else "Global Note"
-        self._draw_box(stdscr, top, left, box_h, box_w, title=title)
+        self._draw_box(stdscr, top, left, box_h, box_w, title=title, accent=True)
         self._safe_add(
             stdscr,
             top + 1,
@@ -2329,7 +2384,7 @@ class TuiApp:
         top = h - box_h - 1
         left = 1
         box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Bookmarks")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Bookmarks", accent=True)
         self._safe_add(
             stdscr,
             top + 1,
@@ -2347,7 +2402,7 @@ class TuiApp:
             text = f"{marker} {chr(cp)} U+{cp:04X}"
             if tag:
                 text += f" [{tag}]"
-            row_attr = curses.A_BOLD if idx == self.bookmark_idx else 0
+            row_attr = self._accent_attr if idx == self.bookmark_idx else 0
             self._safe_add(stdscr, top + 2 + offset, left + 2, text, row_attr)
 
     def _render_filter_overlay(self, stdscr: curses.window) -> None:
@@ -2356,7 +2411,7 @@ class TuiApp:
         box_w = min(138, w - 2)
         top = max(1, (h - box_h) // 2)
         left = max(1, (w - box_w) // 2)
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Filters")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Filters", accent=True)
         self._safe_add(
             stdscr,
             top + 1,
@@ -2381,7 +2436,7 @@ class TuiApp:
             marker = "▶" if idx == self.filter_idx and not self.filter_presets_open else " "
             check = "x" if selected else " "
             text = f"{marker} [{check}] {label}"
-            attr = curses.A_BOLD if idx == self.filter_idx and not self.filter_presets_open else 0
+            attr = self._accent_attr if idx == self.filter_idx and not self.filter_presets_open else 0
             self._safe_add(stdscr, draw_y, left + 4, text, attr)
             draw_y += 1
             prev_group = group_label
@@ -2398,7 +2453,7 @@ class TuiApp:
             for offset, name in enumerate(self.filter_preset_names[pstart:pend]):
                 idx = pstart + offset
                 marker = "▶" if (self.filter_presets_open and idx == self.filter_preset_idx) else " "
-                attr = curses.A_BOLD if (self.filter_presets_open and idx == self.filter_preset_idx) else 0
+                attr = self._accent_attr if (self.filter_presets_open and idx == self.filter_preset_idx) else 0
                 self._safe_add(stdscr, top + 3 + offset, preset_left, f"{marker} {name}", attr)
         self._safe_add(stdscr, top + box_h - 4, left + 2, f"Matches: {len(self.ordered_cps)}", curses.A_BOLD)
         if self.filter_name_input_open:
@@ -2420,7 +2475,7 @@ class TuiApp:
         box_w = min(132, w - 2)
         top = max(1, (h - box_h) // 2)
         left = max(1, (w - box_w) // 2)
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Setup (Lean Package)")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Setup (Lean Package)", accent=True)
         self._safe_add(
             stdscr,
             top + 1,
@@ -2441,7 +2496,7 @@ class TuiApp:
             status = "installed" if available.get(key, False) else "missing"
             marker = "▶" if row == self.setup_idx else " "
             text = f"{marker} {row + 1}. [{checked}] {spec.label:<34}  ({status})"
-            attr = curses.A_BOLD if row == self.setup_idx else 0
+            attr = self._accent_attr if row == self.setup_idx else 0
             row_y = top + 3 + row
             self._safe_add(stdscr, row_y, left + 2, text, attr)
             right_w = max(0, box_w - 60)
@@ -2454,7 +2509,7 @@ class TuiApp:
         option_text = (
             f"{option_marker} [{option_checked}] Auto-build using font-filter ({default_build_font()})"
         )
-        option_attr = curses.A_BOLD if self.setup_idx == option_idx else 0
+        option_attr = self._accent_attr if self.setup_idx == option_idx else 0
         self._safe_add(stdscr, option_row, left + 2, option_text[: max(0, box_w - 4)], option_attr)
 
         self._safe_add(stdscr, option_row + 1, left + 2, "Logs:", curses.A_BOLD)
@@ -2469,7 +2524,7 @@ class TuiApp:
         box_w = min(124, w - 2)
         top = max(1, (h - box_h) // 2)
         left = max(1, (w - box_w) // 2)
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Advanced Rebuild")
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Advanced Rebuild", accent=True)
         self._safe_add(
             stdscr,
             top + 1,
@@ -2485,7 +2540,7 @@ class TuiApp:
         ]
         for idx, row in enumerate(rows):
             marker = "▶" if self.advanced_idx == idx else " "
-            attr = curses.A_BOLD if self.advanced_idx == idx else 0
+            attr = self._accent_attr if self.advanced_idx == idx else 0
             self._safe_add(stdscr, top + 3 + idx, left + 2, f"{marker} {row}"[: max(0, box_w - 4)], attr)
 
         self._safe_add(stdscr, top + 7, left + 2, "Logs:", curses.A_BOLD)
@@ -2510,7 +2565,7 @@ class TuiApp:
         top = max(1, (h - box_h) // 2)
         left = max(1, (w - box_w) // 2)
         title = "Startup / Acknowledgements" if startup else "Acknowledgements"
-        self._draw_box(stdscr, top, left, box_h, box_w, title=title)
+        self._draw_box(stdscr, top, left, box_h, box_w, title=title, accent=True)
         presence = self._available_sources()
         lines = acknowledgements_for_sources(presence)
         if startup:
@@ -2534,7 +2589,7 @@ class TuiApp:
         top, left, box_h, box_w = self._stroke_overlay_geometry(h, w)
         self._ensure_stroke_frames(h, w)
         title = f"Stroke Order: {self.stroke_data.ch} (Esc closes)"
-        self._draw_box(stdscr, top, left, box_h, box_w, title=title)
+        self._draw_box(stdscr, top, left, box_h, box_w, title=title, accent=True)
         status = "done" if self.stroke_done else "animating"
         self._safe_add(
             stdscr,
