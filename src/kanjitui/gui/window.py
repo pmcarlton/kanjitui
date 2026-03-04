@@ -242,7 +242,7 @@ class BookmarkDialog(QDialog):
 
         layout = QVBoxLayout(self)
         hint = QLabel(
-            "Enter: jump   x: delete bookmark   Right: readings   Left: gloss   (selection move clears reveal)",
+            "Enter: jump   x/Delete: delete bookmark   Right: readings   Left: gloss   (selection move clears reveal)",
             self,
         )
         hint.setFont(ui_font(self, 12))
@@ -283,6 +283,14 @@ class BookmarkDialog(QDialog):
         row.addWidget(self.delete_btn)
         row.addWidget(self.close_btn)
         layout.addLayout(row)
+
+        # Ensure delete works regardless of which child widget currently has focus.
+        self._bookmarks_shortcuts: list[QShortcut] = []
+        for sequence in ("x", "X", "Del", "Backspace"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.delete_selected)
+            self._bookmarks_shortcuts.append(shortcut)
 
         self._reload_sets(select=self.state.active_bookmark_set)
         self._reload_bookmarks()
