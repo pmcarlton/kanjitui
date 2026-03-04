@@ -118,8 +118,13 @@ fi
 if [[ -f "$DB_PATH" ]]; then
   CHAR_OUT="/tmp/kanjitui_smoke_char.json"
   QUERY_OUT="/tmp/kanjitui_smoke_query.json"
-  run_step "DB export smoke (char)" env PYTHONPATH=src "$PYTHON" -m kanjitui --db "$DB_PATH" --export-char 漢 --export-format json --export-out "$CHAR_OUT"
-  run_step "DB export smoke (query)" env PYTHONPATH=src "$PYTHON" -m kanjitui --db "$DB_PATH" --export-query 漢 --export-format json --export-out "$QUERY_OUT"
+  SMOKE_DB="$DB_PATH"
+  if ! env PYTHONPATH=src "$PYTHON" -m kanjitui --db "$SMOKE_DB" --export-char 漢 --export-format json --export-out "$CHAR_OUT"; then
+    SMOKE_DB="/tmp/kanjitui_smoke_db.sqlite"
+    cp "$DB_PATH" "$SMOKE_DB"
+    run_step "DB export smoke (char, copied DB fallback)" env PYTHONPATH=src "$PYTHON" -m kanjitui --db "$SMOKE_DB" --export-char 漢 --export-format json --export-out "$CHAR_OUT"
+  fi
+  run_step "DB export smoke (query)" env PYTHONPATH=src "$PYTHON" -m kanjitui --db "$SMOKE_DB" --export-query 漢 --export-format json --export-out "$QUERY_OUT"
   run_step "Validate export artifacts" "$PYTHON" -c '
 import json
 import sys

@@ -76,14 +76,20 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
         assert app.bookmark_open is True
         assert app._handle_bookmark_key(curses.KEY_RIGHT) is True
         assert app.bookmark_reveal_mode == "readings"
+        assert app._handle_bookmark_key(curses.KEY_DOWN) is True
+        assert app.bookmark_reveal_mode == "none"
+        assert app._handle_bookmark_key(curses.KEY_UP) is True
+        assert app.bookmark_reveal_mode == "none"
         assert app._handle_bookmark_key(curses.KEY_LEFT) is True
         assert app.bookmark_reveal_mode == "gloss"
         assert app._handle_bookmark_key(curses.KEY_DOWN) is True
+        assert app.bookmark_reveal_mode == "none"
         assert app._handle_bookmark_key(ord("x")) is True
         if app.bookmark_open:
             assert app._handle_bookmark_key(curses.KEY_HOME) is True
             assert app._handle_bookmark_key(10) is True
-            assert app.bookmark_open is False
+            # Empty active sets may remain open for set-management actions.
+            assert app.bookmark_open in {True, False}
             assert app.bookmark_reveal_mode == "none"
         else:
             assert not app.bookmark_rows

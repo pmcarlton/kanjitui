@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 from kanjitui.db.user import UserStore
 
@@ -47,3 +48,62 @@ def test_user_store_filter_presets_roundtrip(tmp_path: Path) -> None:
     assert loaded["hide_no_reading"] is True
     assert store.delete_filter_preset("jp-only") is True
     assert store.get_filter_preset("jp-only") is None
+
+
+def test_user_store_bookmark_sets_import_export(tmp_path: Path) -> None:
+    store = UserStore(tmp_path / "user.sqlite")
+    cp_default = 0x6F22
+    cp_jp = 0x89D2
+
+    assert store.active_bookmark_set() == "default"
+    assert store.toggle_bookmark(cp_default) is True
+
+    assert store.create_bookmark_set("jp-study", make_active=True) is True
+    assert store.active_bookmark_set() == "jp-study"
+    assert store.toggle_bookmark(cp_jp) is True
+    assert store.is_bookmarked(cp_default) is False
+    assert store.is_bookmarked(cp_jp) is True
+
+    out_path = tmp_path / "jp-study.json"
+    exported = store.export_bookmark_set(out_path)
+    assert exported == 1
+
+    imported_name, imported_count = store.import_bookmark_set(
+        out_path,
+        set_name="imported",
+        replace=True,
+        make_active=True,
+    )
+    assert imported_name == "imported"
+    assert imported_count == 1
+    assert store.active_bookmark_set() == "imported"
+    assert store.is_bookmarked(cp_jp) is True
+
+    assert store.delete_bookmark_set("imported") is True
+    assert store.active_bookmark_set() != "imported"
+
+
+def test_user_store_migrates_legacy_bookmark_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(db_path)
+    with conn:
+        conn.execute(
+            """
+            CREATE TABLE user_bookmarks (
+                cp INTEGER PRIMARY KEY,
+                tag TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO user_bookmarks(cp, tag) VALUES(?, ?)",
+            (0x6F22, "legacy"),
+        )
+    conn.close()
+
+    store = UserStore(db_path)
+    assert store.active_bookmark_set() == "default"
+    rows = store.list_bookmarks(limit=10, set_name="default")
+    assert rows
+    assert rows[0][0] == 0x6F22

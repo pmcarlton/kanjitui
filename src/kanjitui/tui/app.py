@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import json
 from pathlib import Path
 import sqlite3
 import webbrowser
@@ -60,9 +61,11 @@ class TuiApp:
         self.normalizer_name = normalizer_name
         self.search_engine = SearchEngine(conn, normalizer_name=normalizer_name)
         self.user_store = user_store
+        self.active_bookmark_set = "default"
+        self.bookmark_set_names: list[str] = []
         self.bookmarked_cps: set[int] = set()
         if self.user_store is not None:
-            self.bookmarked_cps = {cp for cp, _ in self.user_store.list_bookmarks(limit=1000)}
+            self._refresh_bookmark_cache()
         self.derived_counts = db_query.derived_data_counts(conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(conn)
         self.filter_state = FilterState()
@@ -111,6 +114,9 @@ class TuiApp:
         self.bookmark_idx = 0
         self.bookmark_reveal_mode = "none"
         self._bookmark_study_cache: dict[int, dict[str, str]] = {}
+        self.bookmark_prompt_open = False
+        self.bookmark_prompt_kind = ""
+        self.bookmark_prompt_text = ""
 
         self.radical_open = False
         self.radical_counts = dict(db_query.radical_counts(conn))
@@ -356,14 +362,124 @@ class TuiApp:
         if self.user_store is None:
             self.message = "User workspace unavailable"
             return
-        self.bookmark_rows = self.user_store.list_bookmarks(limit=2000)
-        if not self.bookmark_rows:
-            self.message = "No bookmarks"
-            return
+        self._refresh_bookmark_cache(reload_rows=False)
+        self.bookmark_rows = self.user_store.list_bookmarks(
+            limit=2000, set_name=self.active_bookmark_set
+        )
         self.bookmark_idx = 0
         self.bookmark_reveal_mode = "none"
+        self.bookmark_prompt_open = False
+        self.bookmark_prompt_kind = ""
+        self.bookmark_prompt_text = ""
         self.bookmark_open = True
-        self.message = f"Bookmarks: {len(self.bookmark_rows)}"
+        if not self.bookmark_rows:
+            self.message = f"No bookmarks in set [{self.active_bookmark_set}]"
+        else:
+            self.message = f"Bookmarks [{self.active_bookmark_set}]: {len(self.bookmark_rows)}"
+
+    def _refresh_bookmark_cache(self, reload_rows: bool = False) -> None:
+        if self.user_store is None:
+            self.active_bookmark_set = "default"
+            self.bookmark_set_names = []
+            self.bookmarked_cps = set()
+            return
+        self.active_bookmark_set = self.user_store.active_bookmark_set()
+        self.bookmark_set_names = self.user_store.list_bookmark_sets(limit=200)
+        self.bookmarked_cps = {
+            cp
+            for cp, _ in self.user_store.list_bookmarks(
+                limit=10000, set_name=self.active_bookmark_set
+            )
+        }
+        if reload_rows and self.bookmark_open:
+            self.bookmark_rows = self.user_store.list_bookmarks(
+                limit=2000, set_name=self.active_bookmark_set
+            )
+            if not self.bookmark_rows:
+                self.bookmark_idx = 0
+            else:
+                self.bookmark_idx = min(self.bookmark_idx, len(self.bookmark_rows) - 1)
+
+    def _cycle_bookmark_set(self, step: int) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        names = self.user_store.list_bookmark_sets(limit=200)
+        if not names:
+            self.message = "No bookmark sets"
+            return
+        try:
+            idx = names.index(self.active_bookmark_set)
+        except ValueError:
+            idx = 0
+        target = names[(idx + step) % len(names)]
+        if not self.user_store.set_active_bookmark_set(target):
+            self.message = f"Failed to switch bookmark set: {target}"
+            return
+        self.bookmark_reveal_mode = "none"
+        self._refresh_bookmark_cache(reload_rows=True)
+        if self.bookmark_rows:
+            self.message = f"Bookmark set: {self.active_bookmark_set} ({len(self.bookmark_rows)} entries)"
+        else:
+            self.message = f"Bookmark set: {self.active_bookmark_set} (empty)"
+
+    def _create_bookmark_set(self, name: str) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        created = self.user_store.create_bookmark_set(name, make_active=True)
+        if not created:
+            self.message = f"Bookmark set exists or invalid: {name}"
+            return
+        self.bookmark_reveal_mode = "none"
+        self._refresh_bookmark_cache(reload_rows=True)
+        self.message = f"Created bookmark set: {self.active_bookmark_set}"
+
+    def _delete_active_bookmark_set(self) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        target = self.active_bookmark_set
+        deleted = self.user_store.delete_bookmark_set(target)
+        if not deleted:
+            self.message = f"Cannot delete bookmark set: {target}"
+            return
+        self.bookmark_reveal_mode = "none"
+        self._refresh_bookmark_cache(reload_rows=True)
+        self.message = f"Deleted bookmark set: {target} -> {self.active_bookmark_set}"
+
+    def _default_bookmark_export_dir(self) -> Path:
+        return Path("data/bookmark_sets")
+
+    def _export_active_bookmark_set(self) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        out_dir = self._default_bookmark_export_dir()
+        out_path = out_dir / f"{self.active_bookmark_set}.json"
+        count = self.user_store.export_bookmark_set(out_path, set_name=self.active_bookmark_set)
+        self.message = f"Exported {count} bookmarks to {out_path}"
+
+    def _import_bookmark_set(self, import_path: str) -> None:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return
+        raw = import_path.strip()
+        if not raw:
+            self.message = "Import cancelled: empty path"
+            return
+        path = Path(raw).expanduser()
+        if not path.exists():
+            self.message = f"Import path not found: {path}"
+            return
+        try:
+            target, count = self.user_store.import_bookmark_set(path, make_active=True)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            self.message = f"Import failed: {exc}"
+            return
+        self.bookmark_reveal_mode = "none"
+        self._refresh_bookmark_cache(reload_rows=True)
+        self.message = f"Imported {count} bookmarks into [{target}]"
 
     def _dismiss_startup_overlay(self) -> None:
         if not self.show_startup_overlay:
@@ -1206,13 +1322,17 @@ class TuiApp:
             if cp is None or self.user_store is None:
                 self.message = "User workspace unavailable"
                 return True
-            bookmarked = self.user_store.toggle_bookmark(cp)
+            bookmarked = self.user_store.toggle_bookmark(
+                cp, set_name=self.active_bookmark_set
+            )
             if bookmarked:
                 self.bookmarked_cps.add(cp)
             else:
                 self.bookmarked_cps.discard(cp)
             self.message = (
-                f"Bookmarked U+{cp:04X}" if bookmarked else f"Removed bookmark U+{cp:04X}"
+                f"Bookmarked U+{cp:04X} [{self.active_bookmark_set}]"
+                if bookmarked
+                else f"Removed bookmark U+{cp:04X} [{self.active_bookmark_set}]"
             )
             return True
         if key == ord("B"):
@@ -1785,6 +1905,37 @@ class TuiApp:
 
     def _handle_bookmark_key(self, key: KeyInput) -> bool | None:
         key = self._normalize_text_key(key)
+        if self.bookmark_prompt_open:
+            if key == 27:  # Esc
+                self.bookmark_prompt_open = False
+                self.bookmark_prompt_kind = ""
+                self.bookmark_prompt_text = ""
+                self.message = "Cancelled bookmark prompt"
+                return True
+            if key in (curses.KEY_BACKSPACE, 127, 8):
+                if self.bookmark_prompt_text:
+                    self.bookmark_prompt_text = self.bookmark_prompt_text[:-1]
+                return True
+            if key in (10, 13, curses.KEY_ENTER):
+                text = self.bookmark_prompt_text.strip()
+                kind = self.bookmark_prompt_kind
+                self.bookmark_prompt_open = False
+                self.bookmark_prompt_kind = ""
+                self.bookmark_prompt_text = ""
+                if kind == "create":
+                    self._create_bookmark_set(text)
+                elif kind == "import":
+                    self._import_bookmark_set(text)
+                return True
+            if isinstance(key, str):
+                if key.isprintable():
+                    self.bookmark_prompt_text += key
+                return True
+            if 32 <= key < 127:
+                self.bookmark_prompt_text += chr(key)
+                return True
+            return True
+
         if isinstance(key, str):
             return True
         if key == 27:  # Esc
@@ -1792,25 +1943,56 @@ class TuiApp:
             self.bookmark_rows = []
             self.bookmark_idx = 0
             self.bookmark_reveal_mode = "none"
+            self.bookmark_prompt_open = False
+            self.bookmark_prompt_kind = ""
+            self.bookmark_prompt_text = ""
             self.message = "Closed bookmarks"
             return True
+        if key == ord("["):
+            self._cycle_bookmark_set(-1)
+            return True
+        if key == ord("]"):
+            self._cycle_bookmark_set(+1)
+            return True
+        if key in (ord("c"), ord("C")):
+            self.bookmark_prompt_open = True
+            self.bookmark_prompt_kind = "create"
+            self.bookmark_prompt_text = ""
+            self.message = "Create bookmark set: enter name"
+            return True
+        if key == ord("D"):
+            self._delete_active_bookmark_set()
+            return True
+        if key in (ord("e"), ord("E")):
+            self._export_active_bookmark_set()
+            return True
+        if key == ord("I"):
+            default_path = self._default_bookmark_export_dir()
+            self.bookmark_prompt_open = True
+            self.bookmark_prompt_kind = "import"
+            self.bookmark_prompt_text = str(default_path) + "/"
+            self.message = "Import bookmark set: enter JSON path"
+            return True
         if not self.bookmark_rows:
-            self.bookmark_open = False
             self.bookmark_idx = 0
             self.bookmark_reveal_mode = "none"
-            self.message = "No bookmarks"
+            self.message = f"No bookmarks in [{self.active_bookmark_set}]"
             return True
         if key in (curses.KEY_UP, ord("k")):
             self.bookmark_idx = max(0, self.bookmark_idx - 1)
+            self.bookmark_reveal_mode = "none"
             return True
         if key in (curses.KEY_DOWN, ord("j")):
             self.bookmark_idx = min(len(self.bookmark_rows) - 1, self.bookmark_idx + 1)
+            self.bookmark_reveal_mode = "none"
             return True
         if key in (curses.KEY_HOME, curses.KEY_PPAGE):
             self.bookmark_idx = 0
+            self.bookmark_reveal_mode = "none"
             return True
         if key in (curses.KEY_END, curses.KEY_NPAGE):
             self.bookmark_idx = len(self.bookmark_rows) - 1
+            self.bookmark_reveal_mode = "none"
             return True
         if key == curses.KEY_RIGHT:
             self.bookmark_reveal_mode = "readings"
@@ -1832,16 +2014,15 @@ class TuiApp:
             return True
         if key in (ord("x"), ord("X")) and self.user_store is not None:
             cp, _tag = self.bookmark_rows[self.bookmark_idx]
-            deleted = self.user_store.delete_bookmark(cp)
+            deleted = self.user_store.delete_bookmark(cp, set_name=self.active_bookmark_set)
             if deleted:
                 self.bookmarked_cps.discard(cp)
                 self._bookmark_study_cache.pop(cp, None)
                 del self.bookmark_rows[self.bookmark_idx]
                 if not self.bookmark_rows:
-                    self.bookmark_open = False
                     self.bookmark_idx = 0
                     self.bookmark_reveal_mode = "none"
-                    self.message = "Deleted bookmark; no bookmarks left"
+                    self.message = "Deleted bookmark; active set is now empty"
                     return True
                 self.bookmark_idx = min(self.bookmark_idx, len(self.bookmark_rows) - 1)
                 self.message = f"Deleted bookmark U+{cp:04X}"
@@ -2147,7 +2328,8 @@ class TuiApp:
             "Variants panel: Tab focus then Up/Down select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
             "Workspace: b toggle bookmark, B bookmarks list/jump",
-            "Bookmarks list: x deletes selected bookmark, Right reveals readings, Left reveals gloss",
+            "Bookmarks list: x delete, [/ ] switch set, c create set, D delete set, e export, I import",
+            "Bookmarks study: Right reveals readings, Left reveals gloss (clears on selection move)",
             "Notes: n per-glyph editor, g global editor",
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
             "Stroke order: t popup (only when data exists for current glyph)",
@@ -2379,7 +2561,7 @@ class TuiApp:
             return
         glyph_notes = self.user_store.get_glyph_notes(cp, limit=4)
         global_notes = self.user_store.get_global_notes(limit=4)
-        bookmarks = self.user_store.list_bookmarks(limit=6)
+        bookmarks = self.user_store.list_bookmarks(limit=6, set_name=self.active_bookmark_set)
         queries = self.user_store.recent_queries(limit=4)
         self._safe_add(stdscr, top + 2, left + 2, "Glyph notes:")
         y = top + 3
@@ -2399,7 +2581,7 @@ class TuiApp:
             for note in global_notes:
                 self._safe_add(stdscr, y, left + 4, f"- {note}")
                 y += 1
-        self._safe_add(stdscr, y, left + 2, "Bookmarks:")
+        self._safe_add(stdscr, y, left + 2, f"Bookmarks [{self.active_bookmark_set}]:")
         y += 1
         if not bookmarks:
             self._safe_add(stdscr, y, left + 4, "(none)")
@@ -2459,23 +2641,30 @@ class TuiApp:
 
     def _render_bookmark_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
-        box_h = min(17, h - 2)
+        box_h = min(19, h - 2)
         top = h - box_h - 1
         left = 1
         box_w = w - 2
-        self._draw_box(stdscr, top, left, box_h, box_w, title="Bookmarks", accent=True)
+        title = f"Bookmarks [{self.active_bookmark_set}]"
+        self._draw_box(stdscr, top, left, box_h, box_w, title=title, accent=True)
         self._safe_add(
             stdscr,
             top + 1,
             left + 2,
             "Enter jump  x delete  Esc close  Up/Down select  Home/End top/bottom  Right readings  Left gloss",
         )
+        self._safe_add(
+            stdscr,
+            top + 2,
+            left + 2,
+            "[/] switch set  c create set  D delete set  e export set  I import set",
+        )
         if not self.bookmark_rows:
-            self._safe_add(stdscr, top + 2, left + 2, "(no bookmarks)")
-            return
-        reveal_active = self.bookmark_reveal_mode in {"readings", "gloss"}
+            self._safe_add(stdscr, top + 3, left + 2, "(no bookmarks in active set)")
+        reveal_active = bool(self.bookmark_rows) and self.bookmark_reveal_mode in {"readings", "gloss"}
         reveal_rows = 3 if reveal_active else 0
-        max_rows = max(1, box_h - 3 - reveal_rows)
+        prompt_rows = 1 if self.bookmark_prompt_open else 0
+        max_rows = max(1, box_h - 5 - reveal_rows - prompt_rows)
         start, end = visible_window(self.bookmark_idx, len(self.bookmark_rows), max_rows)
         for offset, (cp, tag) in enumerate(self.bookmark_rows[start:end]):
             idx = start + offset
@@ -2484,11 +2673,11 @@ class TuiApp:
             if tag:
                 text += f" [{tag}]"
             row_attr = self._accent_attr if idx == self.bookmark_idx else 0
-            self._safe_add(stdscr, top + 2 + offset, left + 2, text, row_attr)
+            self._safe_add(stdscr, top + 3 + offset, left + 2, text, row_attr)
         if reveal_active:
             cp, _tag = self.bookmark_rows[self.bookmark_idx]
             payload = self._bookmark_study_payload(cp)
-            separator_y = top + 2 + max_rows
+            separator_y = top + 3 + max_rows
             inner_w = max(1, box_w - 4)
             self._safe_add(stdscr, separator_y, left + 2, "─" * inner_w, curses.A_DIM)
             if self.bookmark_reveal_mode == "readings":
@@ -2499,6 +2688,20 @@ class TuiApp:
                 body = payload["gloss"]
             self._safe_add(stdscr, separator_y + 1, left + 2, label, self._accent_attr)
             self._safe_add(stdscr, separator_y + 2, left + 2, body)
+        if self.bookmark_prompt_open:
+            if self.bookmark_prompt_kind == "create":
+                prompt = "Create set name: "
+            elif self.bookmark_prompt_kind == "import":
+                prompt = "Import JSON path: "
+            else:
+                prompt = "Input: "
+            self._safe_add(
+                stdscr,
+                top + box_h - 2,
+                left + 2,
+                (prompt + self.bookmark_prompt_text)[: max(1, box_w - 4)],
+                self._accent_attr,
+            )
 
     def _render_filter_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()

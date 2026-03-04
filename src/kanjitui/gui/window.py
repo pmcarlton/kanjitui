@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import math
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -234,13 +236,32 @@ class BookmarkDialog(QDialog):
         self.selected_cp: int | None = None
         self.reveal_mode = "none"
         self._study_cache: dict[int, dict[str, str]] = {}
+        self._switching_set = False
         self.setWindowTitle("Bookmarks")
-        self.resize(760, 460)
+        self.resize(860, 560)
 
         layout = QVBoxLayout(self)
-        hint = QLabel("Enter: jump   x: delete   Right: readings   Left: gloss   Esc: close", self)
+        hint = QLabel(
+            "Enter: jump   x: delete bookmark   Right: readings   Left: gloss   (selection move clears reveal)",
+            self,
+        )
         hint.setFont(ui_font(self, 12))
         layout.addWidget(hint)
+
+        set_row = QHBoxLayout()
+        set_row.addWidget(QLabel("Bookmark Set:", self))
+        self.set_combo = QComboBox(self)
+        self.set_combo.setFont(ui_font(self, 12))
+        set_row.addWidget(self.set_combo, stretch=1)
+        self.new_set_btn = QPushButton("New Set", self)
+        self.delete_set_btn = QPushButton("Delete Set", self)
+        self.import_set_btn = QPushButton("Import Set", self)
+        self.export_set_btn = QPushButton("Export Set", self)
+        set_row.addWidget(self.new_set_btn)
+        set_row.addWidget(self.delete_set_btn)
+        set_row.addWidget(self.import_set_btn)
+        set_row.addWidget(self.export_set_btn)
+        layout.addLayout(set_row)
 
         self.results = QListWidget(self)
         self.results.setFont(ui_font(self, 14))
@@ -263,7 +284,37 @@ class BookmarkDialog(QDialog):
         row.addWidget(self.close_btn)
         layout.addLayout(row)
 
-        bookmarks = self.state.list_bookmarks(limit=1000)
+        self._reload_sets(select=self.state.active_bookmark_set)
+        self._reload_bookmarks()
+
+        self.results.itemDoubleClicked.connect(lambda _: self.accept_selected())
+        self.results.itemActivated.connect(lambda _: self.accept_selected())
+        self.results.currentItemChanged.connect(self._on_selection_changed)
+        self.set_combo.currentTextChanged.connect(self._on_set_changed)
+        self.new_set_btn.clicked.connect(self._create_set)
+        self.delete_set_btn.clicked.connect(self._delete_set)
+        self.import_set_btn.clicked.connect(self._import_set)
+        self.export_set_btn.clicked.connect(self._export_set)
+        self.jump_btn.clicked.connect(self.accept_selected)
+        self.delete_btn.clicked.connect(self.delete_selected)
+        self.close_btn.clicked.connect(self.reject)
+        self._update_study_reveal()
+
+    def _reload_sets(self, select: str | None = None) -> None:
+        names = self.state.list_bookmark_sets(limit=300)
+        self._switching_set = True
+        self.set_combo.clear()
+        for name in names:
+            self.set_combo.addItem(name)
+        if select and select in names:
+            self.set_combo.setCurrentText(select)
+        elif names:
+            self.set_combo.setCurrentIndex(0)
+        self._switching_set = False
+
+    def _reload_bookmarks(self) -> None:
+        self.results.clear()
+        bookmarks = self.state.list_bookmarks(limit=2000)
         for cp, tag in bookmarks:
             label = f"{chr(cp)} U+{cp:04X}"
             if tag:
@@ -274,12 +325,98 @@ class BookmarkDialog(QDialog):
         if self.results.count() > 0:
             self.results.setCurrentRow(0)
 
-        self.results.itemDoubleClicked.connect(lambda _: self.accept_selected())
-        self.results.itemActivated.connect(lambda _: self.accept_selected())
-        self.results.currentItemChanged.connect(lambda _cur, _prev: self._update_study_reveal())
-        self.jump_btn.clicked.connect(self.accept_selected)
-        self.delete_btn.clicked.connect(self.delete_selected)
-        self.close_btn.clicked.connect(self.reject)
+    def _on_selection_changed(
+        self,
+        _current: QListWidgetItem | None,
+        _previous: QListWidgetItem | None,
+    ) -> None:
+        # Selection changes should hide reveal content until user explicitly asks again.
+        self.reveal_mode = "none"
+        self._update_study_reveal()
+
+    def _on_set_changed(self, name: str) -> None:
+        if self._switching_set:
+            return
+        if not name:
+            return
+        if not self.state.set_active_bookmark_set(name):
+            return
+        self.reveal_mode = "none"
+        self._reload_sets(select=self.state.active_bookmark_set)
+        self._reload_bookmarks()
+        self._update_study_reveal()
+
+    def _create_set(self) -> None:
+        name, ok = QInputDialog.getText(self, "Create Bookmark Set", "Set name:")
+        if not ok:
+            return
+        if not self.state.create_bookmark_set(name):
+            return
+        self.reveal_mode = "none"
+        self._reload_sets(select=self.state.active_bookmark_set)
+        self._reload_bookmarks()
+        self._update_study_reveal()
+
+    def _delete_set(self) -> None:
+        current = self.state.active_bookmark_set
+        if current == "default":
+            QMessageBox.information(self, "Delete Bookmark Set", "The default set cannot be deleted.")
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Delete Bookmark Set",
+            f"Delete bookmark set '{current}'?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        if not self.state.delete_active_bookmark_set():
+            return
+        self.reveal_mode = "none"
+        self._reload_sets(select=self.state.active_bookmark_set)
+        self._reload_bookmarks()
+        self._update_study_reveal()
+
+    def _export_set(self) -> None:
+        current = self.state.active_bookmark_set
+        default_name = f"{current}.json"
+        path, _selected = QFileDialog.getSaveFileName(
+            self,
+            "Export Bookmark Set",
+            default_name,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            self.state.export_active_bookmark_set(path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export Failed", str(exc))
+
+    def _import_set(self) -> None:
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            "Import Bookmark Set",
+            "",
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        set_name, ok = QInputDialog.getText(
+            self,
+            "Import Bookmark Set",
+            "Set name override (optional):",
+        )
+        if not ok:
+            return
+        override = set_name.strip() or None
+        try:
+            self.state.import_bookmark_set(path, set_name=override, replace=False)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            QMessageBox.warning(self, "Import Failed", str(exc))
+            return
+        self.reveal_mode = "none"
+        self._reload_sets(select=self.state.active_bookmark_set)
+        self._reload_bookmarks()
         self._update_study_reveal()
 
     def _selected_cp(self) -> int | None:
@@ -302,7 +439,7 @@ class BookmarkDialog(QDialog):
     def _update_study_reveal(self) -> None:
         cp = self._selected_cp()
         if cp is None:
-            self.study_title.setText("Study reveal: no bookmark selected")
+            self.study_title.setText(f"Study reveal: no bookmark selected (set: {self.state.active_bookmark_set})")
             self.study_body.setText("")
             return
         if self.reveal_mode == "readings":
@@ -315,7 +452,7 @@ class BookmarkDialog(QDialog):
             self.study_title.setText(f"Gloss: {chr(cp)} U+{cp:04X}")
             self.study_body.setText(payload["gloss"])
             return
-        self.study_title.setText(f"Study reveal ready: {chr(cp)} U+{cp:04X}")
+        self.study_title.setText(f"Study reveal ready: {chr(cp)} U+{cp:04X} [{self.state.active_bookmark_set}]")
         self.study_body.setText("Right shows readings. Left shows gloss.")
 
     def accept_selected(self) -> None:
@@ -334,10 +471,8 @@ class BookmarkDialog(QDialog):
         if self.state.delete_bookmark(cp):
             self._study_cache.pop(cp, None)
             self.results.takeItem(row)
-            if self.results.count() <= 0:
-                self.reject()
-                return
-            self.results.setCurrentRow(max(0, min(row, self.results.count() - 1)))
+            if self.results.count() > 0:
+                self.results.setCurrentRow(max(0, min(row, self.results.count() - 1)))
             self._update_study_reveal()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
@@ -1504,7 +1639,10 @@ class KanjiGuiWindow(QMainWindow):
             return ["(user store unavailable)"]
         glyph_notes = self.state.user_store.get_glyph_notes(cp, limit=4)
         global_notes = self.state.user_store.get_global_notes(limit=4)
-        bookmarks = self.state.user_store.list_bookmarks(limit=6)
+        bookmarks = self.state.user_store.list_bookmarks(
+            limit=6,
+            set_name=self.state.active_bookmark_set,
+        )
         queries = self.state.user_store.recent_queries(limit=4)
         lines = ["Glyph notes:"]
         lines.extend([f"- {note}" for note in glyph_notes] or ["(none)"])
@@ -1512,7 +1650,7 @@ class KanjiGuiWindow(QMainWindow):
         lines.append("Global notes:")
         lines.extend([f"- {note}" for note in global_notes] or ["(none)"])
         lines.append("")
-        lines.append("Bookmarks:")
+        lines.append(f"Bookmarks [{self.state.active_bookmark_set}]:")
         lines.extend([f"- {chr(bcp)} U+{bcp:04X} {f'[{tag}]' if tag else ''}" for bcp, tag in bookmarks[:3]] or ["(none)"])
         lines.append("")
         lines.append("Recent queries:")
@@ -1581,7 +1719,8 @@ class KanjiGuiWindow(QMainWindow):
                 "Variants panel: Tab focus, Up/Down select variant, Enter jump",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
                 "Workspace: b toggle bookmark, B bookmarks list/jump",
-                "Bookmarks list: x deletes selected bookmark, Right reveals readings, Left reveals gloss",
+                "Bookmarks list: x delete bookmark, set selector manages named sets (new/delete/import/export)",
+                "Bookmarks study: Right reveals readings, Left reveals gloss (clears on selection move)",
                 "Notes: n per-glyph editor, g global editor",
                 "Editor: Enter newline, Save button commits",
                 "Setup: Shift-S source setup/download menu",

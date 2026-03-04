@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import quote
 
 from kanjitui.db import query as db_query
@@ -30,9 +31,10 @@ class GuiState:
 
     def __post_init__(self) -> None:
         self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
+        self.active_bookmark_set = "default"
         self.bookmarked_cps: set[int] = set()
         if self.user_store is not None:
-            self.bookmarked_cps = {cp for cp, _ in self.user_store.list_bookmarks(limit=1000)}
+            self.refresh_bookmark_cache()
 
         self.derived_counts = db_query.derived_data_counts(self.conn)
         self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
@@ -371,21 +373,25 @@ class GuiState:
         if cp is None or self.user_store is None:
             self.message = "User workspace unavailable"
             return
-        bookmarked = self.user_store.toggle_bookmark(cp)
+        bookmarked = self.user_store.toggle_bookmark(cp, set_name=self.active_bookmark_set)
         if bookmarked:
             self.bookmarked_cps.add(cp)
         else:
             self.bookmarked_cps.discard(cp)
-        self.message = f"Bookmarked U+{cp:04X}" if bookmarked else f"Removed bookmark U+{cp:04X}"
+        self.message = (
+            f"Bookmarked U+{cp:04X} [{self.active_bookmark_set}]"
+            if bookmarked
+            else f"Removed bookmark U+{cp:04X} [{self.active_bookmark_set}]"
+        )
 
     def delete_bookmark(self, cp: int) -> bool:
         if self.user_store is None:
             self.message = "User workspace unavailable"
             return False
-        deleted = self.user_store.delete_bookmark(cp)
+        deleted = self.user_store.delete_bookmark(cp, set_name=self.active_bookmark_set)
         if deleted:
             self.bookmarked_cps.discard(cp)
-            self.message = f"Deleted bookmark U+{cp:04X}"
+            self.message = f"Deleted bookmark U+{cp:04X} [{self.active_bookmark_set}]"
         else:
             self.message = f"Bookmark U+{cp:04X} not found"
         return deleted
@@ -393,7 +399,81 @@ class GuiState:
     def list_bookmarks(self, limit: int = 200) -> list[tuple[int, str | None]]:
         if self.user_store is None:
             return []
-        return self.user_store.list_bookmarks(limit=limit)
+        return self.user_store.list_bookmarks(limit=limit, set_name=self.active_bookmark_set)
+
+    def refresh_bookmark_cache(self) -> None:
+        if self.user_store is None:
+            self.active_bookmark_set = "default"
+            self.bookmarked_cps = set()
+            return
+        self.active_bookmark_set = self.user_store.active_bookmark_set()
+        self.bookmarked_cps = {
+            cp for cp, _ in self.user_store.list_bookmarks(limit=10000, set_name=self.active_bookmark_set)
+        }
+
+    def list_bookmark_sets(self, limit: int = 200) -> list[str]:
+        if self.user_store is None:
+            return []
+        return self.user_store.list_bookmark_sets(limit=limit)
+
+    def set_active_bookmark_set(self, name: str) -> bool:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return False
+        ok = self.user_store.set_active_bookmark_set(name)
+        if ok:
+            self.refresh_bookmark_cache()
+            self.message = f"Active bookmark set: {self.active_bookmark_set}"
+        else:
+            self.message = f"Bookmark set not found: {name}"
+        return ok
+
+    def create_bookmark_set(self, name: str) -> bool:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return False
+        ok = self.user_store.create_bookmark_set(name, make_active=True)
+        if ok:
+            self.refresh_bookmark_cache()
+            self.message = f"Created bookmark set: {self.active_bookmark_set}"
+        else:
+            self.message = f"Bookmark set already exists: {name}"
+        return ok
+
+    def delete_active_bookmark_set(self) -> bool:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return False
+        target = self.active_bookmark_set
+        ok = self.user_store.delete_bookmark_set(target)
+        if ok:
+            self.refresh_bookmark_cache()
+            self.message = f"Deleted bookmark set: {target}"
+        else:
+            self.message = f"Cannot delete bookmark set: {target}"
+        return ok
+
+    def export_active_bookmark_set(self, out_path: str) -> tuple[bool, int]:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return False, 0
+        count = self.user_store.export_bookmark_set(Path(out_path), set_name=self.active_bookmark_set)
+        self.message = f"Exported {count} bookmarks from [{self.active_bookmark_set}]"
+        return True, count
+
+    def import_bookmark_set(self, in_path: str, set_name: str | None = None, replace: bool = False) -> tuple[bool, int]:
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            return False, 0
+        target, count = self.user_store.import_bookmark_set(
+            Path(in_path),
+            set_name=set_name,
+            replace=replace,
+            make_active=True,
+        )
+        self.refresh_bookmark_cache()
+        self.message = f"Imported {count} bookmarks into [{target}]"
+        return True, count
 
     def glyph_note_prefill(self) -> str:
         cp = self.current_cp
