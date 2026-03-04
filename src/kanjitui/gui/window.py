@@ -232,17 +232,27 @@ class BookmarkDialog(QDialog):
         super().__init__(parent)
         self.state = state
         self.selected_cp: int | None = None
+        self.reveal_mode = "none"
+        self._study_cache: dict[int, dict[str, str]] = {}
         self.setWindowTitle("Bookmarks")
         self.resize(760, 460)
 
         layout = QVBoxLayout(self)
-        hint = QLabel("Enter: jump   x: delete   Esc: close", self)
+        hint = QLabel("Enter: jump   x: delete   Right: readings   Left: gloss   Esc: close", self)
         hint.setFont(ui_font(self, 12))
         layout.addWidget(hint)
 
         self.results = QListWidget(self)
         self.results.setFont(ui_font(self, 14))
         layout.addWidget(self.results)
+
+        self.study_title = QLabel("Study reveal: press Right or Left", self)
+        self.study_title.setFont(ui_font(self, 12, QFont.Weight.Bold))
+        self.study_body = QLabel("", self)
+        self.study_body.setFont(ui_font(self, 12))
+        self.study_body.setWordWrap(True)
+        layout.addWidget(self.study_title)
+        layout.addWidget(self.study_body)
 
         row = QHBoxLayout()
         self.jump_btn = QPushButton("Jump", self)
@@ -266,40 +276,83 @@ class BookmarkDialog(QDialog):
 
         self.results.itemDoubleClicked.connect(lambda _: self.accept_selected())
         self.results.itemActivated.connect(lambda _: self.accept_selected())
+        self.results.currentItemChanged.connect(lambda _cur, _prev: self._update_study_reveal())
         self.jump_btn.clicked.connect(self.accept_selected)
         self.delete_btn.clicked.connect(self.delete_selected)
         self.close_btn.clicked.connect(self.reject)
+        self._update_study_reveal()
 
-    def accept_selected(self) -> None:
+    def _selected_cp(self) -> int | None:
         item = self.results.currentItem()
         if item is None:
-            return
+            return None
         cp = item.data(Qt.ItemDataRole.UserRole)
         if cp is None:
+            return None
+        return int(cp)
+
+    def _study_payload(self, cp: int) -> dict[str, str]:
+        cached = self._study_cache.get(cp)
+        if cached is not None:
+            return cached
+        payload = db_query.bookmark_study_payload(self.state.conn, cp)
+        self._study_cache[cp] = payload
+        return payload
+
+    def _update_study_reveal(self) -> None:
+        cp = self._selected_cp()
+        if cp is None:
+            self.study_title.setText("Study reveal: no bookmark selected")
+            self.study_body.setText("")
             return
-        self.selected_cp = int(cp)
+        if self.reveal_mode == "readings":
+            payload = self._study_payload(cp)
+            self.study_title.setText(f"Readings: {chr(cp)} U+{cp:04X}")
+            self.study_body.setText(payload["readings"])
+            return
+        if self.reveal_mode == "gloss":
+            payload = self._study_payload(cp)
+            self.study_title.setText(f"Gloss: {chr(cp)} U+{cp:04X}")
+            self.study_body.setText(payload["gloss"])
+            return
+        self.study_title.setText(f"Study reveal ready: {chr(cp)} U+{cp:04X}")
+        self.study_body.setText("Right shows readings. Left shows gloss.")
+
+    def accept_selected(self) -> None:
+        cp = self._selected_cp()
+        if cp is None:
+            return
+        self.selected_cp = cp
         self.accept()
 
     def delete_selected(self) -> None:
         item = self.results.currentItem()
-        if item is None:
-            return
-        cp = item.data(Qt.ItemDataRole.UserRole)
+        cp = self._selected_cp()
         if cp is None:
             return
         row = self.results.row(item)
-        if self.state.delete_bookmark(int(cp)):
+        if self.state.delete_bookmark(cp):
+            self._study_cache.pop(cp, None)
             self.results.takeItem(row)
             if self.results.count() <= 0:
                 self.reject()
                 return
             self.results.setCurrentRow(max(0, min(row, self.results.count() - 1)))
+            self._update_study_reveal()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         key = event.key()
         text = event.text()
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.accept_selected()
+            return
+        if key == Qt.Key.Key_Right:
+            self.reveal_mode = "readings"
+            self._update_study_reveal()
+            return
+        if key == Qt.Key.Key_Left:
+            self.reveal_mode = "gloss"
+            self._update_study_reveal()
             return
         if text in ("x", "X"):
             self.delete_selected()
@@ -1528,7 +1581,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Variants panel: Tab focus, Up/Down select variant, Enter jump",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
                 "Workspace: b toggle bookmark, B bookmarks list/jump",
-                "Bookmarks list: x deletes selected bookmark",
+                "Bookmarks list: x deletes selected bookmark, Right reveals readings, Left reveals gloss",
                 "Notes: n per-glyph editor, g global editor",
                 "Editor: Enter newline, Save button commits",
                 "Setup: Shift-S source setup/download menu",

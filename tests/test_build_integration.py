@@ -3,7 +3,14 @@ from pathlib import Path
 import pytest
 
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
-from kanjitui.db.query import connect, get_char_detail, get_provenance, search, variant_graph
+from kanjitui.db.query import (
+    bookmark_study_payload,
+    connect,
+    get_char_detail,
+    get_provenance,
+    search,
+    variant_graph,
+)
 from kanjitui.db.query import (
     available_frequency_profiles,
     derived_data_counts,
@@ -38,6 +45,10 @@ def test_build_and_query_roundtrip(tmp_path: Path) -> None:
         assert detail["ch"] == "漢"
         assert any(r[1] == "han4" for r in detail["cn_readings"])
         assert len(detail["jp_words"]) >= 1
+        study = bookmark_study_payload(conn, 0x6F22)
+        assert "JP on:" in study["readings"]
+        assert "CN:" in study["readings"]
+        assert "Chinese" in study["gloss"]
 
         results = search(conn, "han4")
         assert any(row["cp"] == 0x6F22 for row in results)

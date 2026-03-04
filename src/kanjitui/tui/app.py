@@ -109,6 +109,8 @@ class TuiApp:
         self.bookmark_open = False
         self.bookmark_rows: list[tuple[int, str | None]] = []
         self.bookmark_idx = 0
+        self.bookmark_reveal_mode = "none"
+        self._bookmark_study_cache: dict[int, dict[str, str]] = {}
 
         self.radical_open = False
         self.radical_counts = dict(db_query.radical_counts(conn))
@@ -359,6 +361,7 @@ class TuiApp:
             self.message = "No bookmarks"
             return
         self.bookmark_idx = 0
+        self.bookmark_reveal_mode = "none"
         self.bookmark_open = True
         self.message = f"Bookmarks: {len(self.bookmark_rows)}"
 
@@ -1788,11 +1791,13 @@ class TuiApp:
             self.bookmark_open = False
             self.bookmark_rows = []
             self.bookmark_idx = 0
+            self.bookmark_reveal_mode = "none"
             self.message = "Closed bookmarks"
             return True
         if not self.bookmark_rows:
             self.bookmark_open = False
             self.bookmark_idx = 0
+            self.bookmark_reveal_mode = "none"
             self.message = "No bookmarks"
             return True
         if key in (curses.KEY_UP, ord("k")):
@@ -1807,22 +1812,35 @@ class TuiApp:
         if key in (curses.KEY_END, curses.KEY_NPAGE):
             self.bookmark_idx = len(self.bookmark_rows) - 1
             return True
+        if key == curses.KEY_RIGHT:
+            self.bookmark_reveal_mode = "readings"
+            cp, _tag = self.bookmark_rows[self.bookmark_idx]
+            self.message = f"Study reveal (readings): {chr(cp)} U+{cp:04X}"
+            return True
+        if key == curses.KEY_LEFT:
+            self.bookmark_reveal_mode = "gloss"
+            cp, _tag = self.bookmark_rows[self.bookmark_idx]
+            self.message = f"Study reveal (gloss): {chr(cp)} U+{cp:04X}"
+            return True
         if key in (10, 13, curses.KEY_ENTER):
             cp, _tag = self.bookmark_rows[self.bookmark_idx]
             self._jump_to_cp(cp)
             self.bookmark_open = False
             self.bookmark_rows = []
             self.bookmark_idx = 0
+            self.bookmark_reveal_mode = "none"
             return True
         if key in (ord("x"), ord("X")) and self.user_store is not None:
             cp, _tag = self.bookmark_rows[self.bookmark_idx]
             deleted = self.user_store.delete_bookmark(cp)
             if deleted:
                 self.bookmarked_cps.discard(cp)
+                self._bookmark_study_cache.pop(cp, None)
                 del self.bookmark_rows[self.bookmark_idx]
                 if not self.bookmark_rows:
                     self.bookmark_open = False
                     self.bookmark_idx = 0
+                    self.bookmark_reveal_mode = "none"
                     self.message = "Deleted bookmark; no bookmarks left"
                     return True
                 self.bookmark_idx = min(self.bookmark_idx, len(self.bookmark_rows) - 1)
@@ -1842,6 +1860,14 @@ class TuiApp:
                 stdscr.addstr(y, x, clipped, attr)
             except curses.error:
                 return
+
+    def _bookmark_study_payload(self, cp: int) -> dict[str, str]:
+        cached = self._bookmark_study_cache.get(cp)
+        if cached is not None:
+            return cached
+        payload = db_query.bookmark_study_payload(self.conn, cp)
+        self._bookmark_study_cache[cp] = payload
+        return payload
 
     @staticmethod
     def _mark_selected_glyph(text: str, selected_cp: int | None) -> str:
@@ -2121,7 +2147,7 @@ class TuiApp:
             "Variants panel: Tab focus then Up/Down select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
             "Workspace: b toggle bookmark, B bookmarks list/jump",
-            "Bookmarks list: x deletes selected bookmark",
+            "Bookmarks list: x deletes selected bookmark, Right reveals readings, Left reveals gloss",
             "Notes: n per-glyph editor, g global editor",
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
             "Stroke order: t popup (only when data exists for current glyph)",
@@ -2433,7 +2459,7 @@ class TuiApp:
 
     def _render_bookmark_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
-        box_h = min(14, h - 2)
+        box_h = min(17, h - 2)
         top = h - box_h - 1
         left = 1
         box_w = w - 2
@@ -2442,12 +2468,14 @@ class TuiApp:
             stdscr,
             top + 1,
             left + 2,
-            "Enter jump  x delete  Esc close  Up/Down select  Home/End top/bottom",
+            "Enter jump  x delete  Esc close  Up/Down select  Home/End top/bottom  Right readings  Left gloss",
         )
         if not self.bookmark_rows:
             self._safe_add(stdscr, top + 2, left + 2, "(no bookmarks)")
             return
-        max_rows = box_h - 3
+        reveal_active = self.bookmark_reveal_mode in {"readings", "gloss"}
+        reveal_rows = 3 if reveal_active else 0
+        max_rows = max(1, box_h - 3 - reveal_rows)
         start, end = visible_window(self.bookmark_idx, len(self.bookmark_rows), max_rows)
         for offset, (cp, tag) in enumerate(self.bookmark_rows[start:end]):
             idx = start + offset
@@ -2457,6 +2485,20 @@ class TuiApp:
                 text += f" [{tag}]"
             row_attr = self._accent_attr if idx == self.bookmark_idx else 0
             self._safe_add(stdscr, top + 2 + offset, left + 2, text, row_attr)
+        if reveal_active:
+            cp, _tag = self.bookmark_rows[self.bookmark_idx]
+            payload = self._bookmark_study_payload(cp)
+            separator_y = top + 2 + max_rows
+            inner_w = max(1, box_w - 4)
+            self._safe_add(stdscr, separator_y, left + 2, "─" * inner_w, curses.A_DIM)
+            if self.bookmark_reveal_mode == "readings":
+                label = f"Readings: {chr(cp)} U+{cp:04X}"
+                body = payload["readings"]
+            else:
+                label = f"Gloss: {chr(cp)} U+{cp:04X}"
+                body = payload["gloss"]
+            self._safe_add(stdscr, separator_y + 1, left + 2, label, self._accent_attr)
+            self._safe_add(stdscr, separator_y + 2, left + 2, body)
 
     def _render_filter_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()

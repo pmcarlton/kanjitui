@@ -136,6 +136,74 @@ def first_cn_reading(conn: sqlite3.Connection, cp: int) -> str | None:
     return None
 
 
+def bookmark_study_payload(conn: sqlite3.Connection, cp: int) -> dict[str, str]:
+    on_rows = conn.execute(
+        """
+        SELECT DISTINCT reading
+        FROM jp_readings
+        WHERE cp = ? AND type = 'on' AND reading != ''
+        ORDER BY rank, reading
+        LIMIT 8
+        """,
+        (cp,),
+    ).fetchall()
+    kun_rows = conn.execute(
+        """
+        SELECT DISTINCT reading
+        FROM jp_readings
+        WHERE cp = ? AND type = 'kun' AND reading != ''
+        ORDER BY rank, reading
+        LIMIT 8
+        """,
+        (cp,),
+    ).fetchall()
+    cn_rows = conn.execute(
+        """
+        SELECT DISTINCT pinyin_marked, pinyin_numbered
+        FROM cn_readings
+        WHERE cp = ?
+        ORDER BY rank, pinyin_numbered, pinyin_marked
+        LIMIT 8
+        """,
+        (cp,),
+    ).fetchall()
+    gloss_rows = conn.execute(
+        """
+        SELECT gloss FROM (
+            SELECT gloss FROM jp_gloss WHERE cp = ? AND gloss != ''
+            UNION
+            SELECT gloss FROM cn_gloss WHERE cp = ? AND gloss != ''
+        )
+        ORDER BY gloss
+        LIMIT 8
+        """,
+        (cp, cp),
+    ).fetchall()
+
+    jp_on = [str(row[0]) for row in on_rows if row[0]]
+    jp_kun = [str(row[0]) for row in kun_rows if row[0]]
+    cn_readings: list[str] = []
+    for marked, numbered in cn_rows:
+        marked_text = str(marked or "").strip()
+        if marked_text:
+            cn_readings.append(marked_text)
+            continue
+        numbered_text = str(numbered or "").strip()
+        if numbered_text:
+            cn_readings.append(search_normalize.pinyin_numbered_to_marked(numbered_text))
+
+    jp_on_text = ", ".join(jp_on) if jp_on else "-"
+    jp_kun_text = ", ".join(jp_kun) if jp_kun else "-"
+    cn_text = ", ".join(cn_readings) if cn_readings else "-"
+    glosses = [str(row[0]) for row in gloss_rows if row[0]]
+    gloss_text = "; ".join(glosses) if glosses else "(no gloss)"
+    readings_text = f"JP on: {jp_on_text}  JP kun: {jp_kun_text}  CN: {cn_text}"
+    return {
+        "readings": readings_text,
+        "gloss": gloss_text,
+    }
+
+
 def _kanjidic2_fallback_paths() -> list[Path]:
     candidates: list[Path] = []
     env_kanjidic2 = os.environ.get("KANJITUI_KANJIDIC2", "").strip()
