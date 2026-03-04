@@ -2,7 +2,7 @@ PYTHON ?= python3
 DATA_DIR ?= data/raw
 DB_PATH ?= data/db.sqlite
 
-.PHONY: fetch-data build-sentences build-db build-web-docs test run run-gui
+.PHONY: fetch-data build-sentences build-db build-web-docs test release-smoke run run-gui
 
 fetch-data:
 	bash scripts/fetch_data.sh "$(DATA_DIR)"
@@ -18,6 +18,9 @@ build-web-docs:
 
 test:
 	$(PYTHON) -m pytest
+
+release-smoke:
+	bash scripts/release_smoke.sh
 
 run:
 	$(PYTHON) -m kanjitui --db "$(DB_PATH)"

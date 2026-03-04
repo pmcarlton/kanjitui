@@ -53,6 +53,7 @@ For scripted or non-interactive workflows:
 ```bash
 make fetch-data
 make build-db
+make release-smoke
 make run
 make run-gui
 ```
@@ -61,6 +62,12 @@ Optional sentence build:
 
 ```bash
 make build-sentences
+```
+
+Optional no-tofu validation (after a font-filtered build):
+
+```bash
+make release-smoke DB_PATH=data/db.sqlite FONT_SPEC="/Users/you/Library/Fonts/BabelStoneHan.ttf"
 ```
 
 ## Documentation

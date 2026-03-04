@@ -13,7 +13,7 @@ nav:
       - Search, Filters, and Data Features: capabilities.md
   - Workflows:
       - Use Cases: use-cases.md
+      - Release Checklist: release-checklist.md
   - Stubs and Roadmap:
       - Documentation Stubs: stubs.md
       - TODO Stubs: todo-stubs.md
-
