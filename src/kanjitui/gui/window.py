@@ -2213,14 +2213,19 @@ class KanjiGuiWindow(QMainWindow):
             self.font_warning_lines = []
             self.font_warning_flag = ""
             return
-        self.show_font_warning_overlay = True
-        self.font_warning_lines = lines
         self.font_warning_flag = font_warning_flag_key(meta, self.runtime_font)
+        self.font_warning_lines = lines
+        dismissed = False
+        if self.state.user_store is not None and self.font_warning_flag:
+            dismissed = self.state.user_store.get_flag(self.font_warning_flag, default=False)
+        self.show_font_warning_overlay = not dismissed
 
     def _dismiss_font_warning_overlay(self, persist: bool = True) -> None:
         if not self.show_font_warning_overlay:
             return
         self.show_font_warning_overlay = False
+        if persist and self.state.user_store is not None and self.font_warning_flag:
+            self.state.user_store.set_flag(self.font_warning_flag, True)
 
     def _handle_font_warning_overlay_key(self, event: QKeyEvent) -> bool:
         key = event.key()

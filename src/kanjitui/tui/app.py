@@ -533,14 +533,19 @@ class TuiApp:
             self.font_warning_lines = []
             self.font_warning_flag = ""
             return
-        self.show_font_warning_overlay = True
-        self.font_warning_lines = lines
         self.font_warning_flag = font_warning_flag_key(meta, self.runtime_font)
+        self.font_warning_lines = lines
+        dismissed = False
+        if self.user_store is not None and self.font_warning_flag:
+            dismissed = self.user_store.get_flag(self.font_warning_flag, default=False)
+        self.show_font_warning_overlay = not dismissed
 
     def _dismiss_font_warning_overlay(self, persist: bool = True) -> None:
         if not self.show_font_warning_overlay:
             return
         self.show_font_warning_overlay = False
+        if persist and self.user_store is not None and self.font_warning_flag:
+            self.user_store.set_flag(self.font_warning_flag, True)
 
     def _available_sources(self) -> dict[str, bool]:
         return detect_available_sources(self.runtime_paths)

@@ -7,6 +7,7 @@ from kanjitui.db import query as db_query
 from kanjitui.db.build import BuildConfig, BuildPaths, build_database
 from kanjitui.db.query import connect
 from kanjitui.db.user import UserStore
+from kanjitui.font_warning import font_warning_flag_key
 from kanjitui.tui.app import KEY_SHIFT_LEFT, KEY_SHIFT_RIGHT, TuiApp
 
 
@@ -321,6 +322,36 @@ def test_user_overlay_recent_queries_select_delete_jump_and_clear(tmp_path: Path
         assert app.user_query_rows == []
         assert app.user_store is not None
         assert app.user_store.recent_queries(limit=5) == []
+    finally:
+        conn.close()
+
+
+def test_tui_font_warning_respects_persistent_dismiss_flag(tmp_path: Path, monkeypatch) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    user_store = UserStore(tmp_path / "user.sqlite")
+    meta = {
+        "font_filter_enabled": "1",
+        "font_spec": "/Users/me/Fonts/BabelStoneHan.ttf",
+        "font_resolved": "/Users/me/Fonts/BabelStoneHan.ttf",
+        "build_timestamp_utc": "2026-01-01T00:00:00+00:00",
+    }
+    runtime = "Noto Sans CJK JP"
+    flag = font_warning_flag_key(meta, runtime)
+    user_store.set_flag(flag, True)
+
+    monkeypatch.setattr("kanjitui.tui.app.detect_tui_runtime_font", lambda: runtime)
+    monkeypatch.setattr("kanjitui.tui.app.db_query.get_build_meta", lambda _conn: meta)
+
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn, user_store=user_store)
+        assert app.show_font_warning_overlay is False
+
+        user_store.set_flag(flag, False)
+        app._init_font_warning_overlay()
+        assert app.show_font_warning_overlay is True
+        app._dismiss_font_warning_overlay(persist=True)
+        assert user_store.get_flag(flag, default=False) is True
     finally:
         conn.close()
 

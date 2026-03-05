@@ -120,14 +120,64 @@ def normalize_font_token(value: str | None) -> str:
     return "".join(ch for ch in text if ch.isalnum())
 
 
-def _fonts_equal(runtime_font: str, db_font_label_text: str) -> bool:
+def _strip_style_suffix(token: str) -> str:
+    suffixes = (
+        "regular",
+        "roman",
+        "normal",
+        "book",
+        "medium",
+        "bold",
+        "italic",
+        "oblique",
+    )
+    value = token
+    changed = True
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if value.endswith(suffix) and len(value) > len(suffix) + 3:
+                value = value[: -len(suffix)]
+                changed = True
+    return value
+
+
+def _normalized_font_identities(label: str) -> set[str]:
+    candidates: set[str] = set()
+    raw = (label or "").strip()
+    if not raw:
+        return candidates
+    variants = {raw}
+    # If a path is provided, include basename/stem-derived identities.
+    if "/" in raw or "\\" in raw:
+        try:
+            path = Path(raw)
+            variants.add(path.name)
+            variants.add(path.stem)
+        except Exception:
+            pass
+    for value in variants:
+        norm = normalize_font_token(value)
+        if not norm:
+            continue
+        candidates.add(norm)
+        stripped = _strip_style_suffix(norm)
+        if stripped:
+            candidates.add(stripped)
+    return candidates
+
+
+def _fonts_equal(runtime_font: str, built_spec: str, built_resolved: str) -> bool:
     runtime_norm = normalize_font_token(runtime_font)
     if not runtime_norm:
         return False
-    db_norm = normalize_font_token(db_font_label_text)
-    if not db_norm:
+    runtime_ids = _normalized_font_identities(runtime_font)
+    if not runtime_ids:
         return False
-    return runtime_norm == db_norm
+    db_ids = _normalized_font_identities(built_spec) | _normalized_font_identities(built_resolved)
+    if not db_ids:
+        return False
+    return not runtime_ids.isdisjoint(db_ids)
 
 
 def font_warning_lines(build_meta: dict[str, str], runtime_font: str | None) -> list[str] | None:
@@ -159,8 +209,7 @@ def font_warning_lines(build_meta: dict[str, str], runtime_font: str | None) -> 
     built_label = built_resolved or built_spec or "(unknown)"
     runtime_label = (runtime_font or "").strip()
 
-    # Strict policy: if displayed db-font and ui-font values are unequal, always warn.
-    if runtime_label and _fonts_equal(runtime_label, built_label):
+    if runtime_label and _fonts_equal(runtime_label, built_spec, built_resolved):
         return None
 
     lines = [
