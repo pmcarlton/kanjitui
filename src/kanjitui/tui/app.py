@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import curses
 import json
+import os
 from pathlib import Path
 import sqlite3
 import webbrowser
@@ -48,6 +49,18 @@ KEY_SHIFT_UP = getattr(curses, "KEY_SR", 0x11002)
 KEY_SHIFT_LEFT = getattr(curses, "KEY_SLEFT", 0x11003)
 KEY_SHIFT_RIGHT = getattr(curses, "KEY_SRIGHT", 0x11004)
 COLOR_PAIR_ACCENT = 1
+ESC_DELAY_MS = 25
+
+
+def _configure_curses_escape_delay(delay_ms: int = ESC_DELAY_MS) -> None:
+    setter = getattr(curses, "set_escdelay", None)
+    if callable(setter):
+        try:
+            setter(delay_ms)
+            return
+        except Exception:
+            pass
+    os.environ.setdefault("ESCDELAY", str(delay_ms))
 
 
 class TuiApp:
@@ -1000,6 +1013,7 @@ class TuiApp:
         return True
 
     def run(self, stdscr: curses.window) -> None:
+        _configure_curses_escape_delay()
         self._stdscr = stdscr
         stdscr.keypad(True)
         self._init_colors()
@@ -2916,5 +2930,6 @@ def run_tui(
     normalizer_name: str = "default",
     user_store: UserStore | None = None,
 ) -> None:
+    _configure_curses_escape_delay()
     app = TuiApp(conn, normalizer_name=normalizer_name, user_store=user_store)
     curses.wrapper(app.run)
