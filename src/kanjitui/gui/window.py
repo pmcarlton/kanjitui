@@ -1829,6 +1829,8 @@ class KanjiGuiWindow(QMainWindow):
             )
             dlg.show()
             self._overlays[key] = dlg
+        elif not dlg.isVisible():
+            dlg.show()
         dlg.setWindowTitle(title)
         dlg.set_close_behavior(close_keys=close_keys, close_on_any_key=close_on_any_key)
         dlg.set_on_key(on_key)
@@ -2433,6 +2435,11 @@ class KanjiGuiWindow(QMainWindow):
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self.refresh_view()
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        # Ensure overlays are synced after the main window becomes visible.
+        QTimer.singleShot(0, self.refresh_view)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         key = event.key()
