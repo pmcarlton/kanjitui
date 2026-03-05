@@ -16,6 +16,7 @@ from kanjitui.font_warning import (
     BABELSTONE_HAN_URL,
     NOTO_CJK_URL,
     detect_tui_runtime_font,
+    font_warning_allows_persistent_dismiss,
     font_warning_flag_key,
     font_warning_lines,
     startup_status_line,
@@ -536,7 +537,8 @@ class TuiApp:
         self.font_warning_flag = font_warning_flag_key(meta, self.runtime_font)
         self.font_warning_lines = lines
         dismissed = False
-        if self.user_store is not None and self.font_warning_flag:
+        allow_persist = font_warning_allows_persistent_dismiss(meta, self.runtime_font)
+        if allow_persist and self.user_store is not None and self.font_warning_flag:
             dismissed = self.user_store.get_flag(self.font_warning_flag, default=False)
         self.show_font_warning_overlay = not dismissed
 

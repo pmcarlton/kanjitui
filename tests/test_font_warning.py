@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from kanjitui.font_warning import (
     detect_tui_runtime_font,
+    font_warning_allows_persistent_dismiss,
     startup_status_line,
     font_warning_flag_key,
     font_warning_lines,
@@ -127,3 +128,15 @@ return config
     monkeypatch.setenv("TERM_PROGRAM", "WezTerm")
     monkeypatch.setenv("WEZTERM_CONFIG_FILE", str(cfg))
     assert detect_tui_runtime_font() == "BabelStone Han"
+
+
+def test_font_warning_persistent_dismiss_policy_for_explicit_mismatch() -> None:
+    meta = {
+        "font_filter_enabled": "1",
+        "font_spec": "/Users/me/Fonts/BabelStoneHan.ttf",
+        "font_resolved": "/Users/me/Fonts/BabelStoneHan.ttf",
+        "build_timestamp_utc": "2026-01-01T00:00:00+00:00",
+    }
+    assert font_warning_allows_persistent_dismiss(meta, runtime_font="Noto Sans CJK JP") is False
+    assert font_warning_allows_persistent_dismiss(meta, runtime_font="BabelStone Han") is True
+    assert font_warning_allows_persistent_dismiss(meta, runtime_font=None) is True

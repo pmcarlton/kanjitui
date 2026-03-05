@@ -240,6 +240,27 @@ def font_warning_lines(build_meta: dict[str, str], runtime_font: str | None) -> 
     return lines
 
 
+def font_warning_allows_persistent_dismiss(
+    build_meta: dict[str, str],
+    runtime_font: str | None,
+) -> bool:
+    """Return True only when warning suppression is safe for ambiguous cases."""
+    if not build_meta:
+        return True
+    if build_meta.get("font_filter_enabled", "0") != "1":
+        return True
+    built_spec = build_meta.get("font_spec", "").strip()
+    built_resolved = build_meta.get("font_resolved", "").strip()
+    runtime_label = (runtime_font or "").strip()
+    if not runtime_label:
+        # Unknown runtime font: user may need to suppress noisy warnings.
+        return True
+    if _fonts_equal(runtime_label, built_spec, built_resolved):
+        return True
+    # Explicit mismatch should always warn on startup (no persistent suppression).
+    return False
+
+
 def font_warning_flag_key(build_meta: dict[str, str], runtime_font: str | None) -> str:
     stamp = build_meta.get("build_timestamp_utc", "")
     spec = build_meta.get("font_spec", "")
