@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
@@ -330,6 +331,7 @@ def build_database(
     merged = _merge_chars(unihan, kanjidic, jp_words, cn_words, cn_char_pinyin_num)
 
     coverage: set[int] | None = None
+    resolved_font_path: Path | None = None
     if config.font:
         coverage, resolved_font_path, coverage_error = compute_font_coverage_with_path(config.font)
         if coverage is None:
@@ -582,6 +584,24 @@ def build_database(
                 conn.execute(
                     "INSERT INTO frequency_scores(cp, profile, score, rank) VALUES(?,?,?,?)",
                     (cp, "cn_cedict", float(count), rank),
+                )
+
+            build_meta = {
+                "font_filter_enabled": "1" if config.font else "0",
+                "font_spec": str(config.font or ""),
+                "font_resolved": str(resolved_font_path) if resolved_font_path is not None else "",
+                "build_timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            for key, value in build_meta.items():
+                conn.execute(
+                    """
+                    INSERT INTO build_meta(key, value, updated_at)
+                    VALUES(?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value=excluded.value,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (key, value),
                 )
 
     finally:

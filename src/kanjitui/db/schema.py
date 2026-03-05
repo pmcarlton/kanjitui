@@ -89,6 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_search_gloss ON search_index(gloss_keys);
 
 
 DROP_SQL = """
+DROP TABLE IF EXISTS build_meta;
 DROP TABLE IF EXISTS sentences;
 DROP TABLE IF EXISTS frequency_scores;
 DROP TABLE IF EXISTS phonetic_series;

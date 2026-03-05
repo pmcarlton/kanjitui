@@ -530,6 +530,16 @@ def get_sentences(
     return [tuple(row) for row in rows]
 
 
+def get_build_meta(conn: sqlite3.Connection) -> dict[str, str]:
+    table_row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='build_meta'"
+    ).fetchone()
+    if table_row is None:
+        return {}
+    rows = conn.execute("SELECT key, value FROM build_meta").fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
 def derived_data_counts(conn: sqlite3.Connection) -> dict[str, int]:
     tables = ["field_provenance", "phonetic_series", "sentences", "components", "frequency_scores"]
     counts: dict[str, int] = {}

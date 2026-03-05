@@ -11,6 +11,13 @@ from urllib.parse import quote
 from kanjitui.db import query as db_query
 from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
+from kanjitui.font_warning import (
+    BABELSTONE_HAN_URL,
+    NOTO_CJK_URL,
+    detect_tui_runtime_font,
+    font_warning_flag_key,
+    font_warning_lines,
+)
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.related_nav import (
     RelatedRowsLayout,
@@ -161,6 +168,10 @@ class TuiApp:
         self._accent_attr = curses.A_BOLD
         self.show_ack_overlay = False
         self.show_startup_overlay = False
+        self.show_font_warning_overlay = False
+        self.font_warning_lines: list[str] = []
+        self.font_warning_flag = ""
+        self.runtime_font = detect_tui_runtime_font()
         self.setup_open = False
         self.setup_rows = [key for key in SOURCE_ORDER if key in SOURCES]
         self.setup_selected: set[str] = set()
@@ -187,6 +198,7 @@ class TuiApp:
             self.show_startup_overlay = not self.user_store.get_flag("startup_seen", default=False)
         else:
             self.show_startup_overlay = True
+        self._init_font_warning_overlay()
         self._refresh_radical_availability()
 
         self.router = KeyRouter(self._current_mode, self._handle_normal_key)
@@ -197,6 +209,7 @@ class TuiApp:
         self.router.register("stroke", self._handle_stroke_key)
         self.router.register("setup", self._handle_setup_key)
         self.router.register("advanced", self._handle_advanced_key)
+        self.router.register("fontwarn", self._handle_font_warning_key)
         self.router.register("ack", self._handle_ack_key)
         self.router.register("filter", self._handle_filter_key)
 
@@ -501,6 +514,31 @@ class TuiApp:
         if self.user_store is not None:
             self.user_store.set_flag("startup_seen", True)
 
+    def _init_font_warning_overlay(self) -> None:
+        meta = db_query.get_build_meta(self.conn)
+        lines = font_warning_lines(meta, self.runtime_font)
+        if not lines:
+            self.show_font_warning_overlay = False
+            self.font_warning_lines = []
+            self.font_warning_flag = ""
+            return
+        flag = font_warning_flag_key(meta, self.runtime_font)
+        if self.user_store is not None and self.user_store.get_flag(flag, default=False):
+            self.show_font_warning_overlay = False
+            self.font_warning_lines = []
+            self.font_warning_flag = flag
+            return
+        self.show_font_warning_overlay = True
+        self.font_warning_lines = lines
+        self.font_warning_flag = flag
+
+    def _dismiss_font_warning_overlay(self, persist: bool = True) -> None:
+        if not self.show_font_warning_overlay:
+            return
+        self.show_font_warning_overlay = False
+        if persist and self.user_store is not None and self.font_warning_flag:
+            self.user_store.set_flag(self.font_warning_flag, True)
+
     def _available_sources(self) -> dict[str, bool]:
         return detect_available_sources(self.runtime_paths)
 
@@ -673,6 +711,7 @@ class TuiApp:
             self._rebuild_in_progress = False
             self.conn = connect_db(db_path)
             self._reload_db_state(current_cp=current_cp)
+            self._init_font_warning_overlay()
 
     def _current_db_path(self) -> Path | None:
         row = self.conn.execute("PRAGMA database_list").fetchone()
@@ -707,6 +746,7 @@ class TuiApp:
             self.pos = max(0, min(self.pos, len(self.ordered_cps) - 1))
         else:
             self.pos = 0
+        self._init_font_warning_overlay()
         if self.derived_counts.get("field_provenance", 0) == 0 and not self.message.startswith("Setup"):
             self.message = "DB missing derived rows (run --build to populate phase C/D features)"
 
@@ -1101,6 +1141,8 @@ class TuiApp:
         return 27
 
     def _current_mode(self) -> str:
+        if self.show_font_warning_overlay:
+            return "fontwarn"
         if self.show_ack_overlay:
             return "ack"
         if self.setup_open:
@@ -1123,6 +1165,8 @@ class TuiApp:
 
     def _active_input_context(self) -> str:
         mode = self._current_mode()
+        if mode == "fontwarn":
+            return "Font warning overlay (R rebuild / D dismiss / N/B links)"
         if mode == "ack":
             if self.show_startup_overlay:
                 return "Startup overlay (any key dismisses)"
@@ -1414,6 +1458,43 @@ class TuiApp:
             self.stroke_done = False
             self.stroke_canvas_dims = (0, 0)
             self.message = "Closed stroke animation"
+            return True
+        return True
+
+    def _handle_font_warning_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
+        if key in (27, ord("d"), ord("D")):
+            self._dismiss_font_warning_overlay(persist=True)
+            self.message = "Dismissed font warning"
+            return True
+        if key in (ord("n"), ord("N")):
+            _ = webbrowser.open(NOTO_CJK_URL)
+            self.message = "Opened Noto CJK fonts page"
+            return True
+        if key in (ord("b"), ord("B")):
+            _ = webbrowser.open(BABELSTONE_HAN_URL)
+            self.message = "Opened BabelStone Han page"
+            return True
+        if key in (ord("r"), ord("R")):
+            font_spec = (self.runtime_font or "").strip() or default_build_font()
+            logs: list[str] = []
+            self.message = f"Rebuilding DB with font filter: {font_spec}"
+
+            def _progress(msg: str) -> None:
+                self.message = msg
+
+            ok = self._run_auto_rebuild(font=font_spec, progress=_progress, logs=logs)
+            if ok:
+                self._dismiss_font_warning_overlay(persist=False)
+                self._init_font_warning_overlay()
+                if self.show_font_warning_overlay:
+                    self.message = "Rebuild complete; font warning still applies"
+                else:
+                    self.message = f"Rebuild complete with font filter: {font_spec}"
+            else:
+                self.message = "Font-warning rebuild failed; open Shift-R for details"
             return True
         return True
 
@@ -2147,6 +2228,8 @@ class TuiApp:
                 self._render_ack_overlay(stdscr, startup=False)
             if self.show_startup_overlay:
                 self._render_ack_overlay(stdscr, startup=True)
+            if self.show_font_warning_overlay:
+                self._render_font_warning_overlay(stdscr)
             stdscr.refresh()
             return
 
@@ -2324,6 +2407,8 @@ class TuiApp:
             self._render_ack_overlay(stdscr, startup=False)
         if self.show_startup_overlay:
             self._render_ack_overlay(stdscr, startup=True)
+        if self.show_font_warning_overlay:
+            self._render_font_warning_overlay(stdscr)
 
         stdscr.refresh()
 
@@ -2890,6 +2975,20 @@ class TuiApp:
         else:
             lines.insert(0, "Shift-A or Esc closes this overlay.")
             lines.insert(1, "")
+        max_rows = box_h - 2
+        for i, line in enumerate(lines[:max_rows]):
+            self._safe_add(stdscr, top + 1 + i, left + 2, line[: max(0, box_w - 4)])
+
+    def _render_font_warning_overlay(self, stdscr: curses.window) -> None:
+        h, w = stdscr.getmaxyx()
+        box_h = min(20, h - 2)
+        box_w = min(120, w - 2)
+        top = max(1, (h - box_h) // 2)
+        left = max(1, (w - box_w) // 2)
+        self._draw_box(stdscr, top, left, box_h, box_w, title="Font Warning", accent=True)
+        lines = list(self.font_warning_lines)
+        if not lines:
+            lines = ["Font warning data unavailable.", "", "D / Esc dismiss"]
         max_rows = box_h - 2
         for i, line in enumerate(lines[:max_rows]):
             self._safe_add(stdscr, top + 1 + i, left + 2, line[: max(0, box_w - 4)])

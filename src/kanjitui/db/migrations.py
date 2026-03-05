@@ -90,6 +90,18 @@ MIGRATIONS: tuple[Migration, ...] = (
         CREATE INDEX IF NOT EXISTS idx_search_index_cp ON search_index(cp);
         """,
     ),
+    Migration(
+        version=5,
+        name="phase_i_build_meta",
+        sql="""
+        CREATE TABLE IF NOT EXISTS build_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_build_meta_updated ON build_meta(updated_at DESC);
+        """,
+    ),
 )
 
 

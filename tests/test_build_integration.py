@@ -13,6 +13,7 @@ from kanjitui.db.query import (
 )
 from kanjitui.db.query import (
     available_frequency_profiles,
+    get_build_meta,
     derived_data_counts,
     get_components,
     get_sentences,
@@ -81,6 +82,10 @@ def test_build_and_query_roundtrip(tmp_path: Path) -> None:
 
         derived = derived_data_counts(conn)
         assert derived["field_provenance"] > 0
+
+        meta = get_build_meta(conn)
+        assert meta.get("font_filter_enabled") == "0"
+        assert "build_timestamp_utc" in meta
     finally:
         conn.close()
 

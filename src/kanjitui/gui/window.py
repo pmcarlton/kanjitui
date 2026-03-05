@@ -42,6 +42,12 @@ from PySide6.QtWidgets import (
 from kanjitui.db import query as db_query
 from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
+from kanjitui.font_warning import (
+    BABELSTONE_HAN_URL,
+    NOTO_CJK_URL,
+    font_warning_flag_key,
+    font_warning_lines,
+)
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.related_nav import (
@@ -1203,10 +1209,15 @@ class KanjiGuiWindow(QMainWindow):
         self.runtime_paths = resolve_runtime_paths(self.state.user_store)
         self.stroke_repo = StrokeOrderRepository(root=self.runtime_paths.strokeorder_dir)
         self.show_ack_overlay = False
+        self.show_font_warning_overlay = False
+        self.font_warning_lines: list[str] = []
+        self.font_warning_flag = ""
+        self.runtime_font = (self.ui_font_family or "").strip() or None
         if self.state.user_store is not None:
             self.show_startup_overlay = not self.state.user_store.get_flag("startup_seen", default=False)
         else:
             self.show_startup_overlay = True
+        self._init_font_warning_overlay()
         self._stroke_window: StrokeAnimationDialog | None = None
         self._build_ui()
         self.refresh_view()
@@ -1433,6 +1444,8 @@ class KanjiGuiWindow(QMainWindow):
         )
 
     def _active_input_context(self) -> str:
+        if self.show_font_warning_overlay:
+            return "Input: Font warning overlay (R rebuild, D dismiss, N/B links)"
         if self.show_startup_overlay:
             return "Input: Startup overlay (any key dismisses)"
         if self.show_ack_overlay:
@@ -1818,6 +1831,15 @@ class KanjiGuiWindow(QMainWindow):
             on_close=self._dismiss_startup_overlay,
             close_on_any_key=True,
         )
+        self._sync_overlay(
+            "font_warning",
+            self.show_font_warning_overlay,
+            "Font Warning",
+            self.font_warning_lines,
+            on_close=lambda: self._dismiss_font_warning_overlay(persist=True),
+            close_keys={"D"},
+            on_key=self._handle_font_warning_overlay_key,
+        )
 
     def refresh_view(self) -> None:
         detail = self._current_detail()
@@ -2058,6 +2080,64 @@ class KanjiGuiWindow(QMainWindow):
         if self.state.user_store is not None:
             self.state.user_store.set_flag("startup_seen", True)
 
+    def _init_font_warning_overlay(self) -> None:
+        meta = db_query.get_build_meta(self.state.conn)
+        lines = font_warning_lines(meta, self.runtime_font)
+        if not lines:
+            self.show_font_warning_overlay = False
+            self.font_warning_lines = []
+            self.font_warning_flag = ""
+            return
+        flag = font_warning_flag_key(meta, self.runtime_font)
+        if self.state.user_store is not None and self.state.user_store.get_flag(flag, default=False):
+            self.show_font_warning_overlay = False
+            self.font_warning_lines = []
+            self.font_warning_flag = flag
+            return
+        self.show_font_warning_overlay = True
+        self.font_warning_lines = lines
+        self.font_warning_flag = flag
+
+    def _dismiss_font_warning_overlay(self, persist: bool = True) -> None:
+        if not self.show_font_warning_overlay:
+            return
+        self.show_font_warning_overlay = False
+        if persist and self.state.user_store is not None and self.font_warning_flag:
+            self.state.user_store.set_flag(self.font_warning_flag, True)
+
+    def _handle_font_warning_overlay_key(self, event: QKeyEvent) -> bool:
+        key = event.key()
+        text = event.text()
+        if key in (Qt.Key.Key_Escape,) or text in {"d", "D"}:
+            self._dismiss_font_warning_overlay(persist=True)
+            self.refresh_view()
+            return True
+        if text in {"n", "N"}:
+            webbrowser.open(NOTO_CJK_URL)
+            self.state.message = "Opened Noto CJK fonts page"
+            self.refresh_view()
+            return True
+        if text in {"b", "B"}:
+            webbrowser.open(BABELSTONE_HAN_URL)
+            self.state.message = "Opened BabelStone Han page"
+            self.refresh_view()
+            return True
+        if text in {"r", "R"}:
+            font_spec = (self.runtime_font or "").strip() or self._default_build_font_spec()
+            ok = self._run_advanced_rebuild(use_font_filter=True, font_spec=font_spec)
+            if ok:
+                self._dismiss_font_warning_overlay(persist=False)
+                self._init_font_warning_overlay()
+                if self.show_font_warning_overlay:
+                    self.state.message = "Rebuild complete; font warning still applies"
+                else:
+                    self.state.message = f"Rebuild complete with font filter: {font_spec}"
+            else:
+                self.state.message = "Font-warning rebuild failed"
+            self.refresh_view()
+            return True
+        return False
+
     def _available_sources(self) -> dict[str, bool]:
         return detect_available_sources(self.runtime_paths)
 
@@ -2108,6 +2188,7 @@ class KanjiGuiWindow(QMainWindow):
         finally:
             self.state.conn = connect_db(db_path)
             self.state.reload_db_state(current_cp=current_cp)
+            self._init_font_warning_overlay()
         if auto_build_ok:
             mode = " + font-filter build" if font else ""
             self.state.message = f"Setup download + auto-build{mode} completed: ok={ok} failed={fail}"
@@ -2158,6 +2239,7 @@ class KanjiGuiWindow(QMainWindow):
         finally:
             self.state.conn = connect_db(db_path)
             self.state.reload_db_state(current_cp=current_cp)
+            self._init_font_warning_overlay()
         self.refresh_view()
         return ok
 
