@@ -8,6 +8,7 @@ import sqlite3
 import webbrowser
 from urllib.parse import quote
 
+from kanjitui import __version__
 from kanjitui.db import query as db_query
 from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
@@ -17,6 +18,7 @@ from kanjitui.font_warning import (
     detect_tui_runtime_font,
     font_warning_flag_key,
     font_warning_lines,
+    startup_status_line,
 )
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.related_nav import (
@@ -116,7 +118,8 @@ class TuiApp:
         self.related_row_idx = 0
         self.related_col_idx = 0
 
-        self.message = "Ready"
+        self.build_meta = db_query.get_build_meta(conn)
+        self.message = ""
         if self.derived_counts.get("field_provenance", 0) == 0:
             self.message = "DB missing derived rows (run --build to populate phase C/D features)"
 
@@ -212,6 +215,8 @@ class TuiApp:
         self.router.register("fontwarn", self._handle_font_warning_key)
         self.router.register("ack", self._handle_ack_key)
         self.router.register("filter", self._handle_filter_key)
+        if not self.message:
+            self.message = self._startup_status()
 
     @property
     def current_cp(self) -> int | None:
@@ -516,6 +521,7 @@ class TuiApp:
 
     def _init_font_warning_overlay(self) -> None:
         meta = db_query.get_build_meta(self.conn)
+        self.build_meta = meta
         lines = font_warning_lines(meta, self.runtime_font)
         if not lines:
             self.show_font_warning_overlay = False
@@ -1199,6 +1205,16 @@ class TuiApp:
         if self.show_user_overlay:
             return "Main view + User overlay"
         return f"Main view (panel focus: {self.panel_focus.upper()})"
+
+    def _startup_status(self) -> str:
+        return startup_status_line(
+            program="kanjitui",
+            version=__version__,
+            build_meta=self.build_meta,
+            runtime_font=self.runtime_font,
+            total_glyphs=len(self.filter_data.all_cps),
+            visible_glyphs=len(self.ordered_cps),
+        )
 
     def _handle_key(self, key: KeyInput) -> bool:
         return self.router.dispatch(key)

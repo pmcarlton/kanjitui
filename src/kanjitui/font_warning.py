@@ -37,6 +37,26 @@ def _fonts_match(runtime_font: str, built_spec: str, built_resolved: str) -> boo
 
 
 def font_warning_lines(build_meta: dict[str, str], runtime_font: str | None) -> list[str] | None:
+    if not build_meta:
+        runtime_label = (runtime_font or "").strip()
+        return [
+            "Font Coverage Warning",
+            "",
+            "DB build font metadata is missing (legacy DB build).",
+            f"Current UI font: {runtime_label or '(unknown terminal/font env)'}",
+            "",
+            "Rebuild DB to record build-font metadata and avoid tofu mismatches.",
+            "",
+            "Actions:",
+            "R: rebuild DB against current font (or configured default)",
+            "D / Esc: dismiss warning",
+            "N: open Noto CJK fonts page",
+            "B: open BabelStone Han page",
+            "",
+            f"Noto CJK: {NOTO_CJK_URL}",
+            f"BabelStone Han: {BABELSTONE_HAN_URL}",
+        ]
+
     if build_meta.get("font_filter_enabled", "0") != "1":
         return None
 
@@ -84,3 +104,32 @@ def font_warning_flag_key(build_meta: dict[str, str], runtime_font: str | None) 
     payload = f"{stamp}|{spec}|{resolved}|{runtime}".encode("utf-8")
     digest = hashlib.sha1(payload).hexdigest()[:20]
     return f"font_warning_dismissed_{digest}"
+
+
+def db_font_label(build_meta: dict[str, str]) -> str:
+    if not build_meta:
+        return "unknown"
+    enabled = build_meta.get("font_filter_enabled", "0")
+    if enabled != "1":
+        return "unfiltered"
+    resolved = build_meta.get("font_resolved", "").strip()
+    spec = build_meta.get("font_spec", "").strip()
+    return resolved or spec or "unknown"
+
+
+def startup_status_line(
+    *,
+    program: str,
+    version: str,
+    build_meta: dict[str, str],
+    runtime_font: str | None,
+    total_glyphs: int,
+    visible_glyphs: int | None = None,
+) -> str:
+    db_font = db_font_label(build_meta)
+    ui_font = (runtime_font or "").strip() or "unknown"
+    glyph_bits = [f"glyphs={total_glyphs}"]
+    if visible_glyphs is not None:
+        glyph_bits.append(f"visible={visible_glyphs}")
+    glyph_text = " ".join(glyph_bits)
+    return f"{program} v{version}  db-font={db_font}  ui-font={ui_font}  {glyph_text}"

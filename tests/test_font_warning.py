@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from kanjitui.font_warning import (
+    startup_status_line,
     font_warning_flag_key,
     font_warning_lines,
 )
+
+
+def test_font_warning_lines_present_when_meta_missing() -> None:
+    lines = font_warning_lines({}, runtime_font="Noto Sans CJK JP")
+    assert lines is not None
+    assert any("metadata is missing" in line for line in lines)
 
 
 def test_font_warning_lines_hidden_when_not_font_filtered() -> None:
@@ -50,3 +57,24 @@ def test_font_warning_flag_key_changes_with_runtime_font() -> None:
     key_a = font_warning_flag_key(meta, runtime_font="Noto Sans CJK JP")
     key_b = font_warning_flag_key(meta, runtime_font="BabelStone Han")
     assert key_a != key_b
+
+
+def test_startup_status_line_includes_fonts_and_counts() -> None:
+    meta = {
+        "font_filter_enabled": "1",
+        "font_spec": "BabelStone Han",
+        "font_resolved": "",
+        "build_timestamp_utc": "2026-01-01T00:00:00+00:00",
+    }
+    text = startup_status_line(
+        program="kanjigui",
+        version="0.1.0",
+        build_meta=meta,
+        runtime_font="Noto Sans CJK JP",
+        total_glyphs=49334,
+        visible_glyphs=1200,
+    )
+    assert "kanjigui v0.1.0" in text
+    assert "db-font=BabelStone Han" in text
+    assert "ui-font=Noto Sans CJK JP" in text
+    assert "glyphs=49334" in text

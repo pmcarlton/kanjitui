@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from kanjitui import __version__
 from kanjitui.db import query as db_query
 from kanjitui.db.query import connect as connect_db
 from kanjitui.db.user import UserStore
@@ -47,6 +48,7 @@ from kanjitui.font_warning import (
     NOTO_CJK_URL,
     font_warning_flag_key,
     font_warning_lines,
+    startup_status_line,
 )
 from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
 from kanjitui.gui.state import GuiState, ORDERINGS
@@ -1213,11 +1215,14 @@ class KanjiGuiWindow(QMainWindow):
         self.font_warning_lines: list[str] = []
         self.font_warning_flag = ""
         self.runtime_font = (self.ui_font_family or "").strip() or None
+        self.build_meta: dict[str, str] = {}
         if self.state.user_store is not None:
             self.show_startup_overlay = not self.state.user_store.get_flag("startup_seen", default=False)
         else:
             self.show_startup_overlay = True
         self._init_font_warning_overlay()
+        if self.state.message == "Ready":
+            self.state.message = self._startup_status()
         self._stroke_window: StrokeAnimationDialog | None = None
         self._build_ui()
         self.refresh_view()
@@ -1461,6 +1466,16 @@ class KanjiGuiWindow(QMainWindow):
         if self.state.show_user_overlay:
             return "Input: Main view + User overlay"
         return f"Input: Main view (panel focus: {self.state.panel_focus.upper()})"
+
+    def _startup_status(self) -> str:
+        return startup_status_line(
+            program="kanjigui",
+            version=__version__,
+            build_meta=self.build_meta,
+            runtime_font=self.runtime_font,
+            total_glyphs=len(self.state.filter_data.all_cps),
+            visible_glyphs=len(self.state.ordered_cps),
+        )
 
     @staticmethod
     def _mark_selected_glyph(text: str, selected_cp: int | None) -> str:
@@ -2082,6 +2097,7 @@ class KanjiGuiWindow(QMainWindow):
 
     def _init_font_warning_overlay(self) -> None:
         meta = db_query.get_build_meta(self.state.conn)
+        self.build_meta = meta
         lines = font_warning_lines(meta, self.runtime_font)
         if not lines:
             self.show_font_warning_overlay = False
