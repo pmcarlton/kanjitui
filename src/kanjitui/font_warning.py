@@ -23,17 +23,14 @@ def normalize_font_token(value: str | None) -> str:
     return "".join(ch for ch in text if ch.isalnum())
 
 
-def _fonts_match(runtime_font: str, built_spec: str, built_resolved: str) -> bool:
+def _fonts_equal(runtime_font: str, db_font_label_text: str) -> bool:
     runtime_norm = normalize_font_token(runtime_font)
     if not runtime_norm:
         return False
-    for candidate in (built_spec, built_resolved):
-        cand_norm = normalize_font_token(candidate)
-        if not cand_norm:
-            continue
-        if runtime_norm in cand_norm or cand_norm in runtime_norm:
-            return True
-    return False
+    db_norm = normalize_font_token(db_font_label_text)
+    if not db_norm:
+        return False
+    return runtime_norm == db_norm
 
 
 def font_warning_lines(build_meta: dict[str, str], runtime_font: str | None) -> list[str] | None:
@@ -65,7 +62,8 @@ def font_warning_lines(build_meta: dict[str, str], runtime_font: str | None) -> 
     built_label = built_resolved or built_spec or "(unknown)"
     runtime_label = (runtime_font or "").strip()
 
-    if runtime_label and _fonts_match(runtime_label, built_spec, built_resolved):
+    # Strict policy: if displayed db-font and ui-font values are unequal, always warn.
+    if runtime_label and _fonts_equal(runtime_label, built_label):
         return None
 
     lines = [

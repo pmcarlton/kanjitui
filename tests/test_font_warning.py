@@ -27,10 +27,22 @@ def test_font_warning_lines_hidden_when_fonts_match() -> None:
     meta = {
         "font_filter_enabled": "1",
         "font_spec": "Noto Sans CJK JP",
-        "font_resolved": "/Library/Fonts/NotoSansCJKjp-Regular.otf",
+        "font_resolved": "",
         "build_timestamp_utc": "2026-01-01T00:00:00+00:00",
     }
     assert font_warning_lines(meta, runtime_font="Noto Sans CJK JP") is None
+
+
+def test_font_warning_lines_present_when_db_label_and_runtime_differ_even_if_family_matches_spec() -> None:
+    meta = {
+        "font_filter_enabled": "1",
+        "font_spec": "Noto Sans CJK JP",
+        "font_resolved": "/Library/Fonts/NotoSansCJKjp-Regular.otf",
+        "build_timestamp_utc": "2026-01-01T00:00:00+00:00",
+    }
+    lines = font_warning_lines(meta, runtime_font="Noto Sans CJK JP")
+    assert lines is not None
+    assert any("Current font appears different from the build font." in line for line in lines)
 
 
 def test_font_warning_lines_present_when_mismatch() -> None:
