@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from kanjitui.font_warning import (
+    detect_tui_runtime_font,
     startup_status_line,
     font_warning_flag_key,
     font_warning_lines,
@@ -90,3 +91,31 @@ def test_startup_status_line_includes_fonts_and_counts() -> None:
     assert "db-font=BabelStone Han" in text
     assert "ui-font=Noto Sans CJK JP" in text
     assert "glyphs=49334" in text
+
+
+def test_detect_tui_runtime_font_prefers_explicit_env(monkeypatch) -> None:
+    monkeypatch.setenv("KANJITUI_UI_FONT", "BabelStone Han")
+    monkeypatch.setenv("TERM_PROGRAM", "WezTerm")
+    assert detect_tui_runtime_font() == "BabelStone Han"
+
+
+def test_detect_tui_runtime_font_from_wezterm_config(monkeypatch, tmp_path) -> None:
+    cfg = tmp_path / "wezterm.lua"
+    cfg.write_text(
+        """
+local wezterm = require("wezterm")
+local config = {}
+config.font = wezterm.font_with_fallback {
+  'IosevkaTermSlab Nerd Font Mono',
+  'BabelStone Han',
+  'Cascadia Code',
+}
+return config
+""".strip(),
+        encoding="utf-8",
+    )
+    for key in ("KANJITUI_UI_FONT", "KANJITUI_FONT", "WEZTERM_FONT", "TERM_FONT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("TERM_PROGRAM", "WezTerm")
+    monkeypatch.setenv("WEZTERM_CONFIG_FILE", str(cfg))
+    assert detect_tui_runtime_font() == "BabelStone Han"

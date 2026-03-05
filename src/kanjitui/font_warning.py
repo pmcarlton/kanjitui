@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+from pathlib import Path
 
 
 NOTO_CJK_URL = "https://github.com/notofonts/noto-cjk"
@@ -13,6 +15,101 @@ def detect_tui_runtime_font() -> str | None:
         value = os.environ.get(key, "").strip()
         if value:
             return value
+    if _is_wezterm_session():
+        detected = _detect_wezterm_font_from_config()
+        if detected:
+            return detected
+    return None
+
+
+def _is_wezterm_session() -> bool:
+    term_program = os.environ.get("TERM_PROGRAM", "").strip().lower()
+    if "wezterm" in term_program:
+        return True
+    if os.environ.get("WEZTERM_PANE"):
+        return True
+    if os.environ.get("WEZTERM_EXECUTABLE"):
+        return True
+    return False
+
+
+def _wezterm_config_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    configured = os.environ.get("WEZTERM_CONFIG_FILE", "").strip()
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.append(Path("~/.wezterm.lua").expanduser())
+    candidates.append(Path("~/.config/wezterm/wezterm.lua").expanduser())
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _extract_wezterm_font_candidates(config_text: str) -> list[str]:
+    names: list[str] = []
+
+    def _add_name(name: str) -> None:
+        value = name.strip()
+        if not value:
+            return
+        if value not in names:
+            names.append(value)
+
+    for block in re.findall(r"font_with_fallback\s*\{(.*?)\}", config_text, flags=re.DOTALL):
+        for match in re.findall(r"['\"]([^'\"]+)['\"]", block):
+            _add_name(match)
+    for match in re.findall(r"font\(\s*['\"]([^'\"]+)['\"]\s*\)", config_text):
+        _add_name(match)
+    return names
+
+
+def _pick_likely_cjk_font(candidates: list[str]) -> str | None:
+    if not candidates:
+        return None
+    markers = (
+        "han",
+        "cjk",
+        "hiragino",
+        "pingfang",
+        "song",
+        "ming",
+        "kai",
+        "honoka",
+        "hanazono",
+        "ipaex",
+        "wenquanyi",
+        "simsun",
+        "fang",
+        "noto sans tc",
+        "noto sans sc",
+        "noto sans cjk",
+        "noto serif cjk",
+    )
+    for candidate in candidates:
+        lower = candidate.lower()
+        if any(marker in lower for marker in markers):
+            return candidate
+    return candidates[0]
+
+
+def _detect_wezterm_font_from_config() -> str | None:
+    for path in _wezterm_config_candidates():
+        try:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        candidates = _extract_wezterm_font_candidates(text)
+        chosen = _pick_likely_cjk_font(candidates)
+        if chosen:
+            return chosen
     return None
 
 
