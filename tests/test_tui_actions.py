@@ -293,6 +293,38 @@ def test_startup_overlay_dismissed_on_non_ascii_input(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_user_overlay_recent_queries_select_delete_jump_and_clear(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    user_store = UserStore(tmp_path / "user.sqlite")
+    user_store.save_query("kaku")
+    user_store.save_query("han4")
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn, user_store=user_store)
+        assert app._handle_normal_key(ord("u")) is True
+        assert app.show_user_overlay is True
+        assert app._current_mode() == "user"
+        assert app.user_query_rows
+        # Most recent query is selected first.
+        assert app.user_query_rows[app.user_query_idx][1] == "han4"
+
+        assert app._handle_user_overlay_key(curses.KEY_RIGHT) is True
+        assert app.user_query_rows[app.user_query_idx][1] == "kaku"
+
+        assert app._handle_user_overlay_key(curses.KEY_DC) is True
+        assert [q for _qid, q in app.user_query_rows] == ["han4"]
+
+        assert app._handle_user_overlay_key(10) is True
+        assert "Jumped via query" in app.message
+
+        assert app._handle_user_overlay_key(ord("c")) is True
+        assert app.user_query_rows == []
+        assert app.user_store is not None
+        assert app.user_store.recent_queries(limit=5) == []
+    finally:
+        conn.close()
+
+
 def test_setup_download_triggers_auto_build_and_reconnect(tmp_path: Path, monkeypatch) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)

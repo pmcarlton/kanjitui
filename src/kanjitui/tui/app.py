@@ -132,6 +132,8 @@ class TuiApp:
         self.note_input_cursor = 0
         self.note_target = "glyph"
         self.show_user_overlay = False
+        self.user_query_rows: list[tuple[int, str]] = []
+        self.user_query_idx = 0
         self.bookmark_open = False
         self.bookmark_rows: list[tuple[int, str | None]] = []
         self.bookmark_idx = 0
@@ -184,6 +186,7 @@ class TuiApp:
         self._setup_results: dict[str, str] = {}
         self.advanced_open = False
         self.advanced_idx = 0
+        self.show_startup_on_launch = True
         self.advanced_use_font_filter = True
         self.advanced_font_spec = default_build_font()
         self.advanced_font_input_open = False
@@ -198,7 +201,8 @@ class TuiApp:
         self.filter_name_input_open = False
         self.filter_name_input = ""
         if self.user_store is not None:
-            self.show_startup_overlay = not self.user_store.get_flag("startup_seen", default=False)
+            self.show_startup_on_launch = self.user_store.show_startup_on_launch()
+            self.show_startup_overlay = self.show_startup_on_launch
         else:
             self.show_startup_overlay = True
         self._init_font_warning_overlay()
@@ -208,6 +212,7 @@ class TuiApp:
         self.router.register("search", self._handle_search_key)
         self.router.register("radical", self._handle_radical_key)
         self.router.register("note", self._handle_note_key)
+        self.router.register("user", self._handle_user_overlay_key)
         self.router.register("bookmark", self._handle_bookmark_key)
         self.router.register("stroke", self._handle_stroke_key)
         self.router.register("setup", self._handle_setup_key)
@@ -555,6 +560,8 @@ class TuiApp:
         self.advanced_idx = 0
         self.advanced_font_input_open = False
         self.advanced_logs = []
+        if self.user_store is not None:
+            self.show_startup_on_launch = self.user_store.show_startup_on_launch()
         if not self.advanced_font_spec.strip():
             self.advanced_font_spec = default_build_font()
         self.message = "Advanced: rebuild options"
@@ -1159,6 +1166,8 @@ class TuiApp:
             return "note"
         if self.bookmark_open:
             return "bookmark"
+        if self.show_user_overlay:
+            return "user"
         return "normal"
 
     def _active_input_context(self) -> str:
@@ -1185,6 +1194,8 @@ class TuiApp:
             return "Note editor overlay"
         if mode == "bookmark":
             return "Bookmarks overlay"
+        if mode == "user":
+            return "User overlay (Left/Right select query, Enter jump, Delete remove, c clear)"
 
         if self.show_help:
             return "Main view + Help overlay"
@@ -1412,6 +1423,8 @@ class TuiApp:
             return True
         if key in (ord("u"), ord("U")):
             self.show_user_overlay = not self.show_user_overlay
+            if self.show_user_overlay:
+                self._refresh_user_queries()
             return True
         if key in (ord("i"), ord("I")):
             cp = self.current_cp
@@ -1635,7 +1648,13 @@ class TuiApp:
             self.advanced_idx = max(0, self.advanced_idx - 1)
             return True
         if key in (curses.KEY_DOWN, ord("j")):
-            self.advanced_idx = min(2, self.advanced_idx + 1)
+            self.advanced_idx = min(3, self.advanced_idx + 1)
+            return True
+        if key in (ord("s"),):
+            self.show_startup_on_launch = not self.show_startup_on_launch
+            if self.user_store is not None:
+                self.user_store.set_show_startup_on_launch(self.show_startup_on_launch)
+            self.message = f"Show startup on launch: {'on' if self.show_startup_on_launch else 'off'}"
             return True
         if key in (ord("f"), ord("F")):
             self.advanced_use_font_filter = not self.advanced_use_font_filter
@@ -1649,8 +1668,13 @@ class TuiApp:
             return True
         if key in (ord(" "), 10, 13, curses.KEY_ENTER):
             if self.advanced_idx == 0:
-                self.advanced_use_font_filter = not self.advanced_use_font_filter
+                self.show_startup_on_launch = not self.show_startup_on_launch
+                if self.user_store is not None:
+                    self.user_store.set_show_startup_on_launch(self.show_startup_on_launch)
+                self.message = f"Show startup on launch: {'on' if self.show_startup_on_launch else 'off'}"
             elif self.advanced_idx == 1:
+                self.advanced_use_font_filter = not self.advanced_use_font_filter
+            elif self.advanced_idx == 2:
                 self.advanced_font_input_open = True
                 self.advanced_font_input = self.advanced_font_spec
             else:
@@ -2003,6 +2027,77 @@ class TuiApp:
                 + self.note_input_text[self.note_input_cursor :]
             )
             self.note_input_cursor += 1
+            return True
+        return True
+
+    def _refresh_user_queries(self, limit: int = 120) -> None:
+        if self.user_store is None:
+            self.user_query_rows = []
+            self.user_query_idx = 0
+            return
+        self.user_query_rows = self.user_store.recent_query_rows(limit=limit)
+        if not self.user_query_rows:
+            self.user_query_idx = 0
+            return
+        self.user_query_idx = max(0, min(self.user_query_idx, len(self.user_query_rows) - 1))
+
+    def _handle_user_overlay_key(self, key: KeyInput) -> bool | None:
+        key = self._normalize_text_key(key)
+        if isinstance(key, str):
+            return True
+        if key in (27, ord("u"), ord("U")):
+            self.show_user_overlay = False
+            self.message = "Closed user overlay"
+            return True
+        if self.user_store is None:
+            self.message = "User workspace unavailable"
+            self.show_user_overlay = False
+            return True
+        self._refresh_user_queries()
+        if key in (curses.KEY_LEFT, curses.KEY_UP, KEY_SHIFT_UP, curses.KEY_HOME):
+            if self.user_query_rows:
+                if key in (KEY_SHIFT_UP, curses.KEY_HOME):
+                    self.user_query_idx = 0
+                else:
+                    self.user_query_idx = max(0, self.user_query_idx - 1)
+            return True
+        if key in (curses.KEY_RIGHT, curses.KEY_DOWN, KEY_SHIFT_DOWN, curses.KEY_END):
+            if self.user_query_rows:
+                if key in (KEY_SHIFT_DOWN, curses.KEY_END):
+                    self.user_query_idx = len(self.user_query_rows) - 1
+                else:
+                    self.user_query_idx = min(len(self.user_query_rows) - 1, self.user_query_idx + 1)
+            return True
+        if key in (ord("c"), ord("C")):
+            count = self.user_store.clear_recent_queries()
+            self.user_query_rows = []
+            self.user_query_idx = 0
+            self.message = f"Cleared query history ({count} removed)"
+            return True
+        if key in (curses.KEY_DC, getattr(curses, "KEY_DL", -1)):
+            if not self.user_query_rows:
+                self.message = "No query selected"
+                return True
+            row_id, query = self.user_query_rows[self.user_query_idx]
+            deleted = self.user_store.delete_recent_query(row_id)
+            self._refresh_user_queries()
+            if deleted:
+                self.message = f"Deleted query: {query}"
+            else:
+                self.message = f"Query not found: {query}"
+            return True
+        if key in (10, 13, curses.KEY_ENTER):
+            if not self.user_query_rows:
+                self.message = "No query selected"
+                return True
+            _row_id, query = self.user_query_rows[self.user_query_idx]
+            rows = self.search_engine.run(query, limit=200)
+            if not rows:
+                self.message = f"No results for query: {query}"
+                return True
+            cp = int(rows[0]["cp"])
+            self._jump_to_cp(cp)
+            self.message = f"Jumped via query '{query}' to {chr(cp)} U+{cp:04X}"
             return True
         return True
 
@@ -2435,13 +2530,14 @@ class TuiApp:
             "Variants panel: Tab focus then Up/Down select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
             "Workspace: b toggle bookmark, B bookmarks list/jump",
+            "User panel: Left/Right query select, Enter jump first hit, Delete remove query, c clear history",
             "Bookmarks list: Delete key delete, [/ ] switch set, c create set, D delete set, e export, I import",
             "Bookmarks study: Right reveals readings, Left reveals gloss (clears on selection move)",
             "Notes: n per-glyph editor, g global editor",
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
             "Stroke order: t popup (only when data exists for current glyph)",
             "Setup: Shift-S opens source setup/download menu",
-            "Advanced: Shift-R opens rebuild menu (font-filter optional)",
+            "Advanced: Shift-R opens settings/rebuild menu (startup toggle + font-filter)",
             "Acknowledgements: Shift-A overlay",
             "CCAMC: i open glyph page",
             "Global: ? Help, q Quit",
@@ -2657,19 +2753,26 @@ class TuiApp:
 
     def _render_user_overlay(self, stdscr: curses.window, cp: int) -> None:
         h, w = stdscr.getmaxyx()
-        box_h = min(20, h - 2)
+        box_h = min(22, h - 2)
         top = max(1, (h - box_h) // 2)
         left = 1
         box_w = w - 2
         self._draw_box(stdscr, top, left, box_h, box_w, title="User Workspace", accent=True)
-        self._safe_add(stdscr, top + 1, left + 2, "u closes overlay")
+        self._safe_add(
+            stdscr,
+            top + 1,
+            left + 2,
+            "u/Esc close  Left/Right select query  Enter jump  Delete remove  c clear history",
+            curses.A_BOLD,
+        )
         if self.user_store is None:
             self._safe_add(stdscr, top + 2, left + 2, "(user store unavailable)")
             return
+        self._refresh_user_queries()
         glyph_notes = self.user_store.get_glyph_notes(cp, limit=4)
         global_notes = self.user_store.get_global_notes(limit=4)
         bookmarks = self.user_store.list_bookmarks(limit=6, set_name=self.active_bookmark_set)
-        queries = self.user_store.recent_queries(limit=4)
+        queries = list(self.user_query_rows)
         self._safe_add(stdscr, top + 2, left + 2, "Glyph notes:")
         y = top + 3
         if not glyph_notes:
@@ -2704,14 +2807,43 @@ class TuiApp:
                 y += 1
                 if y >= top + box_h - 3:
                     break
-        self._safe_add(stdscr, y, left + 2, "Recent queries:")
+        if y >= top + box_h - 5:
+            return
+        self._safe_add(stdscr, y, left + 2, "Recent queries (space-separated):")
         y += 1
         if not queries:
             self._safe_add(stdscr, y, left + 4, "(none)")
-        else:
-            for query in queries[:3]:
-                self._safe_add(stdscr, y, left + 4, f"- {query}")
-                y += 1
+            return
+        tokens: list[str] = []
+        for idx, (_row_id, query) in enumerate(queries):
+            clean = " ".join(query.split())
+            if not clean:
+                continue
+            if idx == self.user_query_idx:
+                tokens.append(f"[{clean}]")
+            else:
+                tokens.append(clean)
+        if not tokens:
+            self._safe_add(stdscr, y, left + 4, "(none)")
+            return
+        inner_width = max(16, box_w - 6)
+        lines: list[str] = []
+        line = ""
+        for token in tokens:
+            candidate = token if not line else f"{line} {token}"
+            if len(candidate) <= inner_width:
+                line = candidate
+            else:
+                lines.append(line)
+                line = token
+        if line:
+            lines.append(line)
+        max_lines = max(1, (top + box_h - 2) - y)
+        for idx, line in enumerate(lines[:max_lines]):
+            self._safe_add(stdscr, y + idx, left + 4, line[:inner_width])
+        selected_row_id, selected_query = queries[self.user_query_idx]
+        footer = f"selected #{self.user_query_idx + 1}/{len(queries)} id={selected_row_id}: {selected_query}"
+        self._safe_add(stdscr, top + box_h - 2, left + 2, footer[: max(0, box_w - 4)], self._accent_attr)
 
     def _render_note_input_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()
@@ -2934,11 +3066,12 @@ class TuiApp:
             stdscr,
             top + 1,
             left + 2,
-            "Up/Down: move  Space/Enter: action  e: edit font  f: toggle filter  d/x: rebuild  Esc: close",
+            "Up/Down: move  Space/Enter: action  s: startup-on-launch  e: edit font  f: toggle filter  d/x: rebuild  Esc: close",
             curses.A_BOLD,
         )
 
         rows: list[str] = [
+            f"[{'x' if self.show_startup_on_launch else ' '}] Show startup on launch",
             f"[{'x' if self.advanced_use_font_filter else ' '}] Rebuild with font filter",
             f"Font: {self.advanced_font_spec or default_build_font()}",
             "Run rebuild now",
@@ -2977,7 +3110,7 @@ class TuiApp:
             lines = [
                 "Welcome to kanjitui.",
                 "Press any key to dismiss this page.",
-                "Press Shift-S for setup downloads, Shift-A to reopen acknowledgements.",
+                "Press Shift-S for setup downloads, Shift-R for advanced settings, Shift-A for acknowledgements.",
                 "",
             ] + lines
         else:

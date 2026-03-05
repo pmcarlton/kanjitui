@@ -69,6 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_user_bookmark_sets_updated ON user_bookmark_sets(
 
 BOOKMARK_SET_DEFAULT = "default"
 BOOKMARK_SET_ACTIVE_KEY = "active_bookmark_set"
+SHOW_STARTUP_ON_LAUNCH_KEY = "show_startup_on_launch"
 
 
 @dataclass
@@ -168,6 +169,13 @@ class UserStore:
             """,
             (key, value),
         )
+
+    @staticmethod
+    def _parse_bool(value: str | None, default: bool = False) -> bool:
+        if value is None:
+            return default
+        text = value.strip().lower()
+        return text in {"1", "true", "yes", "on"}
 
     def _bookmark_set_exists(self, conn: sqlite3.Connection, name: str) -> bool:
         row = conn.execute("SELECT 1 FROM user_bookmark_sets WHERE name = ?", (name,)).fetchone()
@@ -542,14 +550,37 @@ class UserStore:
         finally:
             conn.close()
 
-    def recent_queries(self, limit: int = 10) -> list[str]:
+    def recent_query_rows(self, limit: int = 40) -> list[tuple[int, str]]:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT query FROM saved_queries ORDER BY created_at DESC LIMIT ?",
+                "SELECT id, query FROM saved_queries ORDER BY created_at DESC, id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-            return [str(row[0]) for row in rows]
+            return [(int(row[0]), str(row[1])) for row in rows]
+        finally:
+            conn.close()
+
+    def recent_queries(self, limit: int = 10) -> list[str]:
+        return [query for _row_id, query in self.recent_query_rows(limit=limit)]
+
+    def delete_recent_query(self, row_id: int) -> bool:
+        conn = self._connect()
+        try:
+            with conn:
+                cur = conn.execute("DELETE FROM saved_queries WHERE id = ?", (row_id,))
+                return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def clear_recent_queries(self) -> int:
+        conn = self._connect()
+        try:
+            with conn:
+                rows = conn.execute("SELECT COUNT(*) FROM saved_queries").fetchone()
+                count = int(rows[0]) if rows is not None else 0
+                conn.execute("DELETE FROM saved_queries")
+                return count
         finally:
             conn.close()
 
@@ -578,6 +609,31 @@ class UserStore:
                     """,
                     (key, "1" if value else "0"),
                 )
+        finally:
+            conn.close()
+
+    def show_startup_on_launch(self) -> bool:
+        conn = self._connect()
+        try:
+            configured = self._get_setting(conn, SHOW_STARTUP_ON_LAUNCH_KEY)
+            if configured is not None:
+                return self._parse_bool(configured, default=True)
+
+            # Legacy behavior: startup overlay was shown once until startup_seen=true.
+            row = conn.execute(
+                "SELECT value FROM user_flags WHERE key = ?",
+                ("startup_seen",),
+            ).fetchone()
+            seen = self._parse_bool(str(row[0]) if row is not None else None, default=False)
+            return not seen
+        finally:
+            conn.close()
+
+    def set_show_startup_on_launch(self, enabled: bool) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                self._set_setting(conn, SHOW_STARTUP_ON_LAUNCH_KEY, "1" if enabled else "0")
         finally:
             conn.close()
 

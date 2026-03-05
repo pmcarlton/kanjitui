@@ -661,6 +661,9 @@ class AdvancedRebuildDialog(QDialog):
         self.use_font_filter = QCheckBox("Use font filter", self)
         self.use_font_filter.setChecked(True)
         layout.addWidget(self.use_font_filter)
+        self.show_startup_cb = QCheckBox("Show startup on launch", self)
+        self.show_startup_cb.setChecked(self.window.show_startup_on_launch)
+        layout.addWidget(self.show_startup_cb)
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("Font:", self))
@@ -688,6 +691,7 @@ class AdvancedRebuildDialog(QDialog):
 
         self.rebuild_btn.clicked.connect(self._run_rebuild)
         self.close_btn.clicked.connect(self.accept)
+        self.show_startup_cb.toggled.connect(self.window._set_show_startup_on_launch)
 
     def _append(self, text: str) -> None:
         self.log.appendPlainText(text)
@@ -1216,9 +1220,13 @@ class KanjiGuiWindow(QMainWindow):
         self.font_warning_flag = ""
         self.runtime_font = (self.ui_font_family or "").strip() or None
         self.build_meta: dict[str, str] = {}
+        self.user_query_rows: list[tuple[int, str]] = []
+        self.user_query_idx = 0
         if self.state.user_store is not None:
-            self.show_startup_overlay = not self.state.user_store.get_flag("startup_seen", default=False)
+            self.show_startup_on_launch = self.state.user_store.show_startup_on_launch()
+            self.show_startup_overlay = self.show_startup_on_launch
         else:
+            self.show_startup_on_launch = True
             self.show_startup_overlay = True
         self._init_font_warning_overlay()
         if self.state.message == "Ready":
@@ -1669,16 +1677,88 @@ class KanjiGuiWindow(QMainWindow):
             return True
         return False
 
+    def _refresh_user_queries(self, limit: int = 200) -> None:
+        if self.state.user_store is None:
+            self.user_query_rows = []
+            self.user_query_idx = 0
+            return
+        self.user_query_rows = self.state.user_store.recent_query_rows(limit=limit)
+        if not self.user_query_rows:
+            self.user_query_idx = 0
+            return
+        self.user_query_idx = max(0, min(self.user_query_idx, len(self.user_query_rows) - 1))
+
+    def _handle_user_overlay_key(self, event: QKeyEvent) -> bool:
+        if self.state.user_store is None:
+            self.state.message = "User workspace unavailable"
+            self.state.show_user_overlay = False
+            self.refresh_view()
+            return True
+        self._refresh_user_queries()
+        key = event.key()
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Home):
+            if self.user_query_rows:
+                if key == Qt.Key.Key_Home:
+                    self.user_query_idx = 0
+                else:
+                    self.user_query_idx = max(0, self.user_query_idx - 1)
+            self.refresh_view()
+            return True
+        if key in (Qt.Key.Key_Right, Qt.Key.Key_Down, Qt.Key.Key_End):
+            if self.user_query_rows:
+                if key == Qt.Key.Key_End:
+                    self.user_query_idx = len(self.user_query_rows) - 1
+                else:
+                    self.user_query_idx = min(len(self.user_query_rows) - 1, self.user_query_idx + 1)
+            self.refresh_view()
+            return True
+        if key == Qt.Key.Key_Delete:
+            if not self.user_query_rows:
+                self.state.message = "No query selected"
+                self.refresh_view()
+                return True
+            row_id, query = self.user_query_rows[self.user_query_idx]
+            deleted = self.state.user_store.delete_recent_query(row_id)
+            self._refresh_user_queries()
+            self.state.message = f"Deleted query: {query}" if deleted else f"Query not found: {query}"
+            self.refresh_view()
+            return True
+        text = event.text()
+        if text in {"c", "C"}:
+            removed = self.state.user_store.clear_recent_queries()
+            self._refresh_user_queries()
+            self.state.message = f"Cleared query history ({removed} removed)"
+            self.refresh_view()
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if not self.user_query_rows:
+                self.state.message = "No query selected"
+                self.refresh_view()
+                return True
+            _row_id, query = self.user_query_rows[self.user_query_idx]
+            rows = self.state.search_engine.run(query, limit=200)
+            if not rows:
+                self.state.message = f"No results for query: {query}"
+                self.refresh_view()
+                return True
+            cp = int(rows[0]["cp"])
+            self.state.jump_to_cp(cp)
+            self.state.message = f"Jumped via query '{query}' to {chr(cp)} U+{cp:04X}"
+            self.refresh_view()
+            return True
+        return False
+
     def _format_user_overlay(self, cp: int) -> list[str]:
         if self.state.user_store is None:
             return ["(user store unavailable)"]
+        self._refresh_user_queries()
         glyph_notes = self.state.user_store.get_glyph_notes(cp, limit=4)
         global_notes = self.state.user_store.get_global_notes(limit=4)
         bookmarks = self.state.user_store.list_bookmarks(
             limit=6,
             set_name=self.state.active_bookmark_set,
         )
-        queries = self.state.user_store.recent_queries(limit=4)
+        queries = list(self.user_query_rows)
         lines = ["Glyph notes:"]
         lines.extend([f"- {note}" for note in glyph_notes] or ["(none)"])
         lines.append("")
@@ -1688,8 +1768,29 @@ class KanjiGuiWindow(QMainWindow):
         lines.append(f"Bookmarks [{self.state.active_bookmark_set}]:")
         lines.extend([f"- {chr(bcp)} U+{bcp:04X} {f'[{tag}]' if tag else ''}" for bcp, tag in bookmarks[:3]] or ["(none)"])
         lines.append("")
-        lines.append("Recent queries:")
-        lines.extend([f"- {q}" for q in queries[:3]] or ["(none)"])
+        lines.append("Recent queries: Left/Right select, Enter jump, Delete remove, c clear")
+        if not queries:
+            lines.append("(none)")
+            return lines
+        token_parts: list[str] = []
+        for idx, (_row_id, query) in enumerate(queries):
+            clean = " ".join(query.split())
+            if not clean:
+                continue
+            if idx == self.user_query_idx:
+                token_parts.append(f"[{clean}]")
+            else:
+                token_parts.append(clean)
+        if not token_parts:
+            lines.append("(none)")
+            return lines
+        joined = " ".join(token_parts)
+        wrap = 96
+        for start in range(0, len(joined), wrap):
+            lines.append(joined[start : start + wrap])
+        selected_id, selected_query = queries[self.user_query_idx]
+        lines.append("")
+        lines.append(f"Selected #{self.user_query_idx + 1}/{len(queries)} id={selected_id}: {selected_query}")
         return lines
 
     def _sync_overlay(
@@ -1749,7 +1850,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Quick filter: Shift-N toggles hide-no-reading",
                 "Search: / open, Enter run/jump, Up/Down select",
                 "Radicals: r open browser",
-                "Advanced: Shift-R rebuild menu (font-filter optional)",
+                "Advanced: Shift-R settings/rebuild menu (startup toggle + font-filter)",
                 "Panels: 1 JP, 2 CN, 3 Sentences, 4 Variants",
                 "Variants panel: Tab focus, Up/Down select variant, Enter jump",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
@@ -1820,6 +1921,7 @@ class KanjiGuiWindow(QMainWindow):
             self._format_user_overlay(cp),
             on_close=lambda: setattr(self.state, "show_user_overlay", False),
             close_keys={"u", "U"},
+            on_key=self._handle_user_overlay_key,
         )
 
         self._sync_overlay(
@@ -1834,7 +1936,7 @@ class KanjiGuiWindow(QMainWindow):
             "Welcome to kanjigui.",
             "Press any key to dismiss this page.",
             "Shift-S opens setup/download menu.",
-            "Shift-R opens advanced rebuild menu.",
+            "Shift-R opens advanced settings/rebuild menu.",
             "Shift-A reopens acknowledgements.",
             "",
         ] + self._ack_lines()
@@ -2094,6 +2196,13 @@ class KanjiGuiWindow(QMainWindow):
         self.show_startup_overlay = False
         if self.state.user_store is not None:
             self.state.user_store.set_flag("startup_seen", True)
+
+    def _set_show_startup_on_launch(self, enabled: bool) -> None:
+        self.show_startup_on_launch = bool(enabled)
+        if self.state.user_store is not None:
+            self.state.user_store.set_show_startup_on_launch(self.show_startup_on_launch)
+        self.state.message = f"Show startup on launch: {'on' if self.show_startup_on_launch else 'off'}"
+        self.refresh_view()
 
     def _init_font_warning_overlay(self) -> None:
         meta = db_query.get_build_meta(self.state.conn)

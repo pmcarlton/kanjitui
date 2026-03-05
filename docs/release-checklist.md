@@ -8,6 +8,19 @@ Primary goals:
 - keep TUI and GUI behavior aligned
 - catch edge-case breakage before tagging releases
 
+## 1.0 Hardening Stack (Working List)
+
+- [x] Visible `Show startup on launch` toggle in settings (TUI + GUI).
+- [x] Recent-query UX in user overlay:
+  - space-separated display
+  - selectable
+  - `Delete` removes selected query
+  - `Enter` jumps via selected query
+  - `c` clears history
+- [ ] Cleanup legacy/dead persisted keys (including old `font_warning_dismissed_*` flags).
+- [ ] Surface reading-filter scope in ambiguous contexts.
+- [ ] Modal-state hardening pass for hidden/scattered persistent states.
+
 ## Global Gates (Every Checkpoint)
 
 All checkpoints must satisfy these baseline gates:

@@ -37,6 +37,32 @@ def test_user_store_flags_roundtrip(tmp_path: Path) -> None:
     assert store.get_flag("startup_seen", default=True) is False
 
 
+def test_user_store_startup_setting_and_query_history_controls(tmp_path: Path) -> None:
+    store = UserStore(tmp_path / "user.sqlite")
+    assert store.show_startup_on_launch() is True
+
+    store.set_flag("startup_seen", True)
+    # Legacy fallback should still respect startup_seen until explicit setting is written.
+    assert store.show_startup_on_launch() is False
+
+    store.set_show_startup_on_launch(True)
+    assert store.show_startup_on_launch() is True
+    store.set_show_startup_on_launch(False)
+    assert store.show_startup_on_launch() is False
+
+    store.save_query("han4")
+    store.save_query("kaku")
+    rows = store.recent_query_rows(limit=10)
+    assert len(rows) == 2
+    row_id, query = rows[0]
+    assert query == "kaku"
+    assert store.delete_recent_query(row_id) is True
+    assert "kaku" not in store.recent_queries(limit=10)
+    removed = store.clear_recent_queries()
+    assert removed == 1
+    assert store.recent_queries(limit=10) == []
+
+
 def test_user_store_filter_presets_roundtrip(tmp_path: Path) -> None:
     store = UserStore(tmp_path / "user.sqlite")
     payload = {"filters": {"reading_availability": "jp"}, "hide_no_reading": True}
