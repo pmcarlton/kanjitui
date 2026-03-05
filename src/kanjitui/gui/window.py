@@ -242,7 +242,7 @@ class BookmarkDialog(QDialog):
 
         layout = QVBoxLayout(self)
         hint = QLabel(
-            "Enter: jump   x/Delete: delete bookmark   Right: readings   Left: gloss   (selection move clears reveal)",
+            "Enter: jump   Delete: delete bookmark   Right: readings   Left: gloss   (selection move clears reveal)",
             self,
         )
         hint.setFont(ui_font(self, 12))
@@ -286,7 +286,7 @@ class BookmarkDialog(QDialog):
 
         # Ensure delete works regardless of which child widget currently has focus.
         self._bookmarks_shortcuts: list[QShortcut] = []
-        for sequence in ("x", "X", "Del", "Backspace"):
+        for sequence in ("Del",):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(self.delete_selected)
@@ -485,7 +485,6 @@ class BookmarkDialog(QDialog):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
         key = event.key()
-        text = event.text()
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.accept_selected()
             return
@@ -497,7 +496,7 @@ class BookmarkDialog(QDialog):
             self.reveal_mode = "gloss"
             self._update_study_reveal()
             return
-        if text in ("x", "X"):
+        if key == Qt.Key.Key_Delete:
             self.delete_selected()
             return
         super().keyPressEvent(event)
@@ -1727,7 +1726,7 @@ class KanjiGuiWindow(QMainWindow):
                 "Variants panel: Tab focus, Up/Down select variant, Enter jump",
                 "Overlays: c Components, s Phonetics, p Provenance, u User panel",
                 "Workspace: b toggle bookmark, B bookmarks list/jump",
-                "Bookmarks list: x delete bookmark, set selector manages named sets (new/delete/import/export)",
+                "Bookmarks list: Delete key deletes bookmark, set selector manages named sets (new/delete/import/export)",
                 "Bookmarks study: Right reveals readings, Left reveals gloss (clears on selection move)",
                 "Notes: n per-glyph editor, g global editor",
                 "Editor: Enter newline, Save button commits",

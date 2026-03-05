@@ -2012,7 +2012,7 @@ class TuiApp:
             self.bookmark_idx = 0
             self.bookmark_reveal_mode = "none"
             return True
-        if key in (ord("x"), ord("X")) and self.user_store is not None:
+        if key in (curses.KEY_DC, getattr(curses, "KEY_DL", -1)) and self.user_store is not None:
             cp, _tag = self.bookmark_rows[self.bookmark_idx]
             deleted = self.user_store.delete_bookmark(cp, set_name=self.active_bookmark_set)
             if deleted:
@@ -2328,7 +2328,7 @@ class TuiApp:
             "Variants panel: Tab focus then Up/Down select variant, Enter jump",
             "Overlays: c Components, s Phonetics, p Provenance, u User panel",
             "Workspace: b toggle bookmark, B bookmarks list/jump",
-            "Bookmarks list: x delete, [/ ] switch set, c create set, D delete set, e export, I import",
+            "Bookmarks list: Delete key delete, [/ ] switch set, c create set, D delete set, e export, I import",
             "Bookmarks study: Right reveals readings, Left reveals gloss (clears on selection move)",
             "Notes: n per-glyph editor, g global editor",
             "Note editor: Enter newline, Ctrl+S save, Esc cancel",
@@ -2651,7 +2651,7 @@ class TuiApp:
             stdscr,
             top + 1,
             left + 2,
-            "Enter jump  x delete  Esc close  Up/Down select  Home/End top/bottom  Right readings  Left gloss",
+            "Enter jump  Delete remove  Esc close  Up/Down select  Home/End top/bottom  Right readings  Left gloss",
         )
         self._safe_add(
             stdscr,
