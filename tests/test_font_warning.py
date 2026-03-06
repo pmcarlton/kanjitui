@@ -130,6 +130,28 @@ return config
     assert detect_tui_runtime_font() == "BabelStone Han"
 
 
+def test_detect_tui_runtime_font_ignores_commented_wezterm_fallback_entries(monkeypatch, tmp_path) -> None:
+    cfg = tmp_path / "wezterm.lua"
+    cfg.write_text(
+        """
+local wezterm = require("wezterm")
+local config = {}
+config.font = wezterm.font_with_fallback {
+  'IosevkaTermSlab Nerd Font Mono',
+  -- 'BabelStone Han',
+  'Noto Sans CJK JP',
+}
+return config
+""".strip(),
+        encoding="utf-8",
+    )
+    for key in ("KANJITUI_UI_FONT", "KANJITUI_FONT", "WEZTERM_FONT", "TERM_FONT"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("TERM_PROGRAM", "WezTerm")
+    monkeypatch.setenv("WEZTERM_CONFIG_FILE", str(cfg))
+    assert detect_tui_runtime_font() == "Noto Sans CJK JP"
+
+
 def test_font_warning_persistent_dismiss_policy_for_explicit_mismatch() -> None:
     meta = {
         "font_filter_enabled": "1",

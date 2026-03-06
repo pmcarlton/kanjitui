@@ -61,12 +61,41 @@ def _extract_wezterm_font_candidates(config_text: str) -> list[str]:
         if value not in names:
             names.append(value)
 
-    for block in re.findall(r"font_with_fallback\s*\{(.*?)\}", config_text, flags=re.DOTALL):
+    cleaned_text = _strip_lua_comments(config_text)
+    for block in re.findall(r"font_with_fallback\s*\{(.*?)\}", cleaned_text, flags=re.DOTALL):
         for match in re.findall(r"['\"]([^'\"]+)['\"]", block):
             _add_name(match)
-    for match in re.findall(r"font\(\s*['\"]([^'\"]+)['\"]\s*\)", config_text):
+    for match in re.findall(r"font\(\s*['\"]([^'\"]+)['\"]\s*\)", cleaned_text):
         _add_name(match)
     return names
+
+
+def _strip_lua_comments(text: str) -> str:
+    # Drop simple block comments first.
+    no_block = re.sub(r"--\[\[.*?\]\]", "", text, flags=re.DOTALL)
+    cleaned_lines: list[str] = []
+    for raw_line in no_block.splitlines():
+        line_chars: list[str] = []
+        in_single = False
+        in_double = False
+        idx = 0
+        while idx < len(raw_line):
+            ch = raw_line[idx]
+            nxt = raw_line[idx + 1] if idx + 1 < len(raw_line) else ""
+            if not in_single and not in_double and ch == "-" and nxt == "-":
+                break
+            if ch == "'" and not in_double:
+                escaped = idx > 0 and raw_line[idx - 1] == "\\"
+                if not escaped:
+                    in_single = not in_single
+            elif ch == '"' and not in_single:
+                escaped = idx > 0 and raw_line[idx - 1] == "\\"
+                if not escaped:
+                    in_double = not in_double
+            line_chars.append(ch)
+            idx += 1
+        cleaned_lines.append("".join(line_chars))
+    return "\n".join(cleaned_lines)
 
 
 def _pick_likely_cjk_font(candidates: list[str]) -> str | None:
