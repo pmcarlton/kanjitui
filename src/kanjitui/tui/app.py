@@ -37,6 +37,7 @@ from kanjitui.setup_resources import (
     default_setup_selection,
     detect_available_sources,
     download_selected_sources,
+    setup_storage_guidance_lines,
     rebuild_database_from_sources,
     resolve_runtime_paths,
 )
@@ -3215,12 +3216,15 @@ class TuiApp:
         )
         option_attr = self._accent_attr if self.setup_idx == option_idx else 0
         self._safe_add(stdscr, option_row, left + 2, option_text[: max(0, box_w - 4)], option_attr)
+        guide_lines = setup_storage_guidance_lines(sorted(self.setup_selected))
+        for i, line in enumerate(guide_lines[:2]):
+            self._safe_add(stdscr, option_row + 1 + i, left + 2, line[: max(0, box_w - 4)], curses.A_DIM)
 
-        self._safe_add(stdscr, option_row + 1, left + 2, "Logs:", curses.A_BOLD)
-        log_rows = box_h - (8 + max_rows)
+        self._safe_add(stdscr, option_row + 3, left + 2, "Logs:", curses.A_BOLD)
+        log_rows = box_h - (10 + max_rows)
         start = max(0, len(self.setup_logs) - log_rows)
         for i, line in enumerate(self.setup_logs[start : start + log_rows]):
-            self._safe_add(stdscr, option_row + 2 + i, left + 2, line[: max(0, box_w - 4)])
+            self._safe_add(stdscr, option_row + 4 + i, left + 2, line[: max(0, box_w - 4)])
 
     def _render_advanced_overlay(self, stdscr: curses.window) -> None:
         h, w = stdscr.getmaxyx()

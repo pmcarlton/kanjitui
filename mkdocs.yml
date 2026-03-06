@@ -7,6 +7,7 @@ nav:
   - Getting Started:
       - Install and First Run: getting-started.md
       - Build and Font Filter: build-font-filter.md
+      - macOS Standalone Packaging: macos-packaging.md
   - Reference:
       - TUI Menu and Keys: tui-reference.md
       - GUI Menu and Keys: gui-reference.md

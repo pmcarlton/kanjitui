@@ -41,5 +41,5 @@ Source providers are modular and optional. Once built, the app runs offline.
 
 1. [Install and First Run](getting-started.md)
 2. [Build and Font Filter](build-font-filter.md)
-3. [TUI Menu and Keys](tui-reference.md) or [GUI Menu and Keys](gui-reference.md)
-
+3. [macOS Standalone Packaging](macos-packaging.md)
+4. [TUI Menu and Keys](tui-reference.md) or [GUI Menu and Keys](gui-reference.md)

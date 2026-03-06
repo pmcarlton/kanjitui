@@ -8,7 +8,9 @@ from kanjitui.setup_resources import (
     default_setup_selection,
     detect_available_sources,
     download_selected_sources,
+    estimate_setup_storage_mib,
     RuntimePaths,
+    setup_storage_guidance_lines,
     SOURCES,
 )
 
@@ -97,3 +99,22 @@ def test_download_selected_sources_emits_step_progress(tmp_path: Path, monkeypat
     assert any(line.startswith("[1/2] Starting Unicode Unihan") for line in logs)
     assert any(line.startswith("[1/2] Completed Unicode Unihan") for line in logs)
     assert any(line.startswith("[2/2] Starting CC-CEDICT") for line in logs)
+
+
+def test_setup_storage_guidance_estimates_include_db_when_buildable_sources_selected() -> None:
+    raw_mib, db_mib, total_mib = estimate_setup_storage_mib(["unihan", "strokeorder"])
+    assert raw_mib > 0
+    assert db_mib > 0
+    assert total_mib == raw_mib + db_mib
+    lines = setup_storage_guidance_lines(["unihan", "strokeorder"])
+    assert any("Estimated selected downloads" in line for line in lines)
+    assert any("Typical full lean data footprint" in line for line in lines)
+
+
+def test_setup_storage_guidance_estimates_skip_db_without_dictionary_sources() -> None:
+    raw_mib, db_mib, total_mib = estimate_setup_storage_mib(["strokeorder"])
+    assert raw_mib > 0
+    assert db_mib == 0
+    assert total_mib == raw_mib
+    lines = setup_storage_guidance_lines(["strokeorder"])
+    assert any("No DB build expected" in line for line in lines)

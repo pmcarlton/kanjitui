@@ -89,6 +89,8 @@ Results mode:
 - `n`: clear selection
 - `Esc`: close
 
+Setup displays estimated storage for selected sources, plus a full-lean reference footprint.
+
 ## Advanced Rebuild (`Shift+R`)
 
 - `Up` / `Down`: move item
@@ -97,4 +99,3 @@ Results mode:
 - `e`: edit font spec
 - `d` or `x`: run rebuild
 - `Esc`: close
-

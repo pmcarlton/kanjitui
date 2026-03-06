@@ -67,6 +67,7 @@ from kanjitui.setup_resources import (
     default_setup_selection,
     detect_available_sources,
     download_selected_sources,
+    setup_storage_guidance_lines,
     rebuild_database_from_sources,
     resolve_runtime_paths,
 )
@@ -553,6 +554,10 @@ class SetupDialog(QDialog):
         )
         hint.setFont(ui_font(self, 12))
         layout.addWidget(hint)
+        self.storage_hint = QLabel(self)
+        self.storage_hint.setWordWrap(True)
+        self.storage_hint.setFont(ui_font(self, 11))
+        layout.addWidget(self.storage_hint)
 
         self.checkboxes: dict[str, QCheckBox] = {}
         presence = self.window._available_sources()
@@ -570,6 +575,7 @@ class SetupDialog(QDialog):
             status = "installed" if presence.get(key, False) else "missing"
             cb = QCheckBox(f"{spec.label} ({status})", self)
             cb.setChecked(key in defaults)
+            cb.toggled.connect(self._refresh_storage_hint)
             self.checkboxes[key] = cb
             source_grid.addWidget(cb, row_idx, 0)
             link = QLabel(
@@ -608,6 +614,12 @@ class SetupDialog(QDialog):
 
         self.download_btn.clicked.connect(self._run_download)
         self.close_btn.clicked.connect(self.accept)
+        self._refresh_storage_hint()
+
+    def _refresh_storage_hint(self) -> None:
+        selected = [key for key, cb in self.checkboxes.items() if cb.isChecked()]
+        lines = setup_storage_guidance_lines(selected)
+        self.storage_hint.setText("  ".join(lines))
 
     def _append(self, text: str) -> None:
         self.log.appendPlainText(text)

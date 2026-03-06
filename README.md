@@ -34,6 +34,7 @@ kanjigui --db data/db.sqlite
 Notes:
 - `Shift+A` opens acknowledgements/license summary.
 - Setup shows terms/license links per source.
+- Setup also shows storage guidance. Typical full lean data footprint is about `300-400 MiB` (reference install: `~377 MiB` in `data/`).
 
 ## Core Keys
 
@@ -56,6 +57,28 @@ make build-db
 make release-smoke
 make run
 make run-gui
+```
+
+## Standalone macOS App (Lean)
+
+Build a `.app` (and DMG by default) with bundled GUI + advanced-user TUI binary:
+
+```bash
+make package-macos
+```
+
+Result highlights:
+
+- App bundle: `dist/Kanjigui.app`
+- TUI binary inside app: `dist/Kanjigui.app/Contents/MacOS/kanjitui`
+- Launcher uses user-writable data paths under:
+  - `~/Library/Application Support/kanjitui/db.sqlite`
+  - `~/Library/Application Support/kanjitui/raw/`
+
+Optional shell link for advanced users after installing to `/Applications`:
+
+```bash
+ln -sf /Applications/Kanjigui.app/Contents/MacOS/kanjitui /usr/local/bin/kanjitui
 ```
 
 Optional sentence build:

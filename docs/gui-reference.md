@@ -54,4 +54,4 @@ Startup overlay closes on any non-modifier key.
 - You can set UI font with `--ui-font`.
 - Large glyph display is independent from panel text formatting.
 - Keyboard-first operation is fully supported; mouse is optional.
-
+- Setup (`Shift+S`) includes per-selection storage estimates and full-lean footprint guidance.

@@ -23,6 +23,19 @@ DOWNLOAD_CHUNK_BYTES = 256 * 1024
 LOG_EVERY_BYTES = 8 * 1024 * 1024
 ALLOW_FTP_FALLBACK = os.environ.get("KANJITUI_ALLOW_FTP", "").strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_BUILD_FONT = "Noto Sans Mono CJK"
+# Estimated on-disk footprint (MiB) for raw source payloads after extraction.
+SOURCE_ESTIMATED_MIB: dict[str, int] = {
+    "unihan": 50,
+    "cedict": 10,
+    "kanjidic2": 15,
+    "jmdict": 60,
+    "sentences": 35,
+    "strokeorder": 41,
+}
+# Typical DB size for a full lean build with JP/CN providers enabled.
+ESTIMATED_DB_MIB = 100
+# Real-world reference from development installs (data/ directory only).
+REFERENCE_FULL_DATA_MIB = 377
 
 
 @dataclass(frozen=True)
@@ -104,6 +117,29 @@ def resolve_runtime_paths(user_store: UserStore | None) -> RuntimePaths:
 
 def default_build_font() -> str:
     return os.environ.get("KANJITUI_FONT", DEFAULT_BUILD_FONT).strip() or DEFAULT_BUILD_FONT
+
+
+def estimate_setup_storage_mib(selected: list[str] | tuple[str, ...] | set[str]) -> tuple[int, int, int]:
+    selected_keys = [key for key in selected if key in SOURCE_ESTIMATED_MIB]
+    raw_mib = sum(SOURCE_ESTIMATED_MIB[key] for key in selected_keys)
+    has_build_sources = any(key in BUILD_PROVIDER_ORDER for key in selected_keys)
+    db_mib = ESTIMATED_DB_MIB if has_build_sources else 0
+    return raw_mib, db_mib, raw_mib + db_mib
+
+
+def setup_storage_guidance_lines(selected: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+    raw_mib, db_mib, total_mib = estimate_setup_storage_mib(selected)
+    lines = [
+        f"Estimated selected downloads: ~{raw_mib} MiB raw data",
+    ]
+    if db_mib:
+        lines.append(f"Estimated DB after auto-build: +~{db_mib} MiB (total ~{total_mib} MiB)")
+    else:
+        lines.append("No DB build expected from current selection (no dictionary providers selected).")
+    lines.append(
+        f"Typical full lean data footprint is ~300-400 MiB (reference install: ~{REFERENCE_FULL_DATA_MIB} MiB)."
+    )
+    return lines
 
 
 def _path_exists(path: Path) -> bool:

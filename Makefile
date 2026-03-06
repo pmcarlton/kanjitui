@@ -2,7 +2,7 @@ PYTHON ?= python3
 DATA_DIR ?= data/raw
 DB_PATH ?= data/db.sqlite
 
-.PHONY: fetch-data build-sentences build-db build-web-docs test release-smoke run run-gui
+.PHONY: fetch-data build-sentences build-db build-web-docs package-macos test release-smoke run run-gui
 
 fetch-data:
 	bash scripts/fetch_data.sh "$(DATA_DIR)"
@@ -15,6 +15,9 @@ build-db:
 
 build-web-docs:
 	mkdocs build -d web/landing/docs
+
+package-macos:
+	bash scripts/package_macos.sh
 
 test:
 	$(PYTHON) -m pytest
