@@ -87,6 +87,10 @@ def test_gui_state_tab_focus_cycles_to_variants(tmp_path: Path) -> None:
         assert state.focus == "cn"
 
         state.toggle_focus()
+        assert state.panel_focus == "sentences"
+        assert state.focus == "cn"
+
+        state.toggle_focus()
         assert state.panel_focus == "variants"
         assert state.focus == "cn"
 

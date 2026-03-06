@@ -101,18 +101,21 @@ class RelatedRowsLayout:
     rows: list[list[int]]
     jp_row_indexes: list[int | None]
     cn_row_indexes: list[int | None]
+    sentence_row_indexes: list[int | None]
 
 
 def build_related_rows_layout(
     current_cp: int,
     jp_words: Sequence[tuple[str, str | None, str | None, int]],
     cn_words: Sequence[tuple[str, str, str | None, str | None, str, int]],
+    sentence_texts: Sequence[str] | None = None,
     allowed: set[int] | None = None,
 ) -> RelatedRowsLayout:
     rows: list[list[int]] = []
     seen: set[int] = set()
     jp_row_indexes: list[int | None] = []
     cn_row_indexes: list[int | None] = []
+    sentence_row_indexes: list[int | None] = []
 
     def add_row(values: list[int]) -> int | None:
         row = [cp for cp in values if cp != current_cp]
@@ -132,10 +135,14 @@ def build_related_rows_layout(
     for trad, simp, _marked, _numbered, _gloss, _rank in cn_words:
         cn_row_indexes.append(add_row(cn_word_related_cps(current_cp, trad, simp, allowed=allowed)))
 
+    for sentence_text in sentence_texts or ():
+        sentence_row_indexes.append(add_row(_ordered_unique_cps_from_texts([sentence_text], current_cp)))
+
     return RelatedRowsLayout(
         rows=rows,
         jp_row_indexes=jp_row_indexes,
         cn_row_indexes=cn_row_indexes,
+        sentence_row_indexes=sentence_row_indexes,
     )
 
 

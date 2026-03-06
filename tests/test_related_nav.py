@@ -1,5 +1,6 @@
 from kanjitui.related_nav import (
     build_related_candidates,
+    build_related_rows_layout,
     build_related_rows,
     cn_word_related_cp,
     cn_word_related_cps,
@@ -39,3 +40,19 @@ def test_build_related_rows_preserves_multiple_choices_per_line() -> None:
     rows = build_related_rows(current, jp_words, cn_words, phonetic_rows=None, allowed=None)
     assert rows
     assert len(rows[0]) >= 2
+
+
+def test_build_related_rows_layout_includes_sentence_rows() -> None:
+    current = ord("不")
+    jp_words = []
+    cn_words = []
+    layout = build_related_rows_layout(
+        current_cp=current,
+        jp_words=jp_words,
+        cn_words=cn_words,
+        sentence_texts=["我不知道。", "今日は終わらない。"],
+        allowed=None,
+    )
+    assert layout.rows
+    assert len(layout.sentence_row_indexes) == 2
+    assert any(idx is not None for idx in layout.sentence_row_indexes)

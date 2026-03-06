@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import unicodedata
 import webbrowser
 from urllib.parse import quote
 
@@ -871,6 +872,8 @@ class TuiApp:
             panels.append("jp")
         if self.show_cn:
             panels.append("cn")
+        if self.show_sentences:
+            panels.append("sentences")
         if self.show_variants:
             panels.append("variants")
         if not panels:
@@ -942,13 +945,35 @@ class TuiApp:
         self._jump_to_cp(target.cp)
         return True
 
-    def _main_related_layout(self, detail: dict) -> RelatedRowsLayout:
+    def _main_related_layout(
+        self,
+        detail: dict,
+        sentence_rows: tuple[tuple[str, str, str | None, str | None, str | None, str | None, int], ...] | None = None,
+    ) -> RelatedRowsLayout:
+        if sentence_rows is None:
+            sentence_rows = self._sentence_rows_for_detail(detail)
+        sentence_texts = (
+            [text for _lang, text, _reading, _gloss, _source, _license, _rank in sentence_rows]
+            if self.show_sentences
+            else []
+        )
         return build_related_rows_layout(
             current_cp=int(detail["cp"]),
             jp_words=detail["jp_words"],
             cn_words=detail["cn_words"],
+            sentence_texts=sentence_texts,
             allowed=None,
         )
+
+    def _sentence_rows_for_detail(
+        self,
+        detail: dict,
+    ) -> tuple[tuple[str, str, str | None, str | None, str | None, str | None, int], ...]:
+        cp = int(detail["cp"])
+        sentence_langs = self._sentence_langs()
+        sentence_limit = 6 if len(sentence_langs) > 1 else 3
+        rows = db_query.get_sentences(self.conn, cp, limit=sentence_limit, langs=sentence_langs)
+        return tuple(rows)
 
     def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
         rows: list[list[int]] = []
@@ -1005,7 +1030,7 @@ class TuiApp:
         if not rows:
             self.related_row_idx = 0
             self.related_col_idx = 0
-            self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN words"
+            self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.related_row_idx = (self.related_row_idx + delta) % len(rows)
         row = rows[self.related_row_idx]
@@ -1029,7 +1054,7 @@ class TuiApp:
         if not rows:
             self.related_row_idx = 0
             self.related_col_idx = 0
-            self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN words"
+            self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.related_row_idx = max(0, min(self.related_row_idx, len(rows) - 1))
         row = rows[self.related_row_idx]
@@ -1371,6 +1396,7 @@ class TuiApp:
             return True
         if key == ord("3"):
             self.show_sentences = not self.show_sentences
+            self._ensure_panel_focus_valid()
             return True
         if key in (ord("4"), ord("v"), ord("V")):
             self.show_variants = not self.show_variants
@@ -2247,6 +2273,44 @@ class TuiApp:
             except curses.error:
                 return
 
+    @staticmethod
+    def _char_display_width(ch: str) -> int:
+        if not ch:
+            return 1
+        return 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
+
+    def _safe_add_selectable(
+        self,
+        stdscr: curses.window,
+        y: int,
+        x: int,
+        text: str,
+        selectable: set[int] | None = None,
+        selected_cp: int | None = None,
+    ) -> None:
+        h, w = stdscr.getmaxyx()
+        if y < 0 or y >= h:
+            return
+        cur_x = x
+        selectable_cps = selectable or set()
+        for ch in text:
+            width = self._char_display_width(ch)
+            if cur_x >= w - 1:
+                break
+            cp = ord(ch)
+            attr = 0
+            if cp in selectable_cps:
+                attr = self._accent_attr | curses.A_UNDERLINE
+                if selected_cp is not None and cp == selected_cp:
+                    attr |= curses.A_BOLD
+            try:
+                stdscr.addstr(y, cur_x, ch, attr)
+            except curses.error:
+                pass
+            cur_x += max(1, width)
+            if cur_x >= w:
+                break
+
     def _bookmark_study_payload(self, cp: int) -> dict[str, str]:
         cached = self._bookmark_study_cache.get(cp)
         if cached is not None:
@@ -2254,16 +2318,6 @@ class TuiApp:
         payload = db_query.bookmark_study_payload(self.conn, cp)
         self._bookmark_study_cache[cp] = payload
         return payload
-
-    @staticmethod
-    def _mark_selected_glyph(text: str, selected_cp: int | None) -> str:
-        if selected_cp is None:
-            return text
-        glyph = chr(selected_cp)
-        idx = text.find(glyph)
-        if idx < 0:
-            return text
-        return text[:idx] + "[" + glyph + "]" + text[idx + 1 :]
 
     def _draw_box(
         self,
@@ -2297,14 +2351,33 @@ class TuiApp:
             title_attr = self._accent_attr if accent else curses.A_BOLD
             self._safe_add(stdscr, top, left + 2, banner[: max(0, width - 4)], title_attr)
 
-    def _render_section(self, stdscr: curses.window, y: int, width: int, title: str, lines: list[str], highlighted: bool = False) -> int:
+    def _render_section(
+        self,
+        stdscr: curses.window,
+        y: int,
+        width: int,
+        title: str,
+        lines: list[str | tuple[str, set[int], int | None]],
+        highlighted: bool = False,
+    ) -> int:
         inner_width = max(10, width - 1)
         box_h = len(lines) + 2
         if y + box_h >= stdscr.getmaxyx()[0] - 4:
             return y
         self._draw_box(stdscr, y, 0, box_h, inner_width, title=title, double=highlighted, accent=highlighted)
         for idx, line in enumerate(lines):
-            self._safe_add(stdscr, y + 1 + idx, 2, line[: max(0, inner_width - 4)])
+            if isinstance(line, tuple):
+                text, selectable, selected_cp = line
+                self._safe_add_selectable(
+                    stdscr,
+                    y + 1 + idx,
+                    2,
+                    text[: max(0, inner_width - 4)],
+                    selectable=selectable,
+                    selected_cp=selected_cp,
+                )
+            else:
+                self._safe_add(stdscr, y + 1 + idx, 2, line[: max(0, inner_width - 4)])
         return y + box_h
 
     def _render(self, stdscr: curses.window) -> None:
@@ -2371,7 +2444,8 @@ class TuiApp:
         )
         self._safe_add(stdscr, 0, 0, header, curses.A_BOLD)
         stroke_available = self.stroke_repo.has_char(detail["ch"])
-        main_related_layout = self._main_related_layout(detail)
+        sentence_rows = self._sentence_rows_for_detail(detail)
+        main_related_layout = self._main_related_layout(detail, sentence_rows=sentence_rows)
         selected_related_cp = self._selected_related_cp(detail)
         active_main_row_idx: int | None = None
         if not self.show_phonetic and main_related_layout.rows:
@@ -2392,11 +2466,14 @@ class TuiApp:
             jp_gloss = "; ".join(detail["jp_gloss"][:3]) if detail["jp_gloss"] else "(none)"
             words = detail["jp_words"]
             reading_label = "Readings (romaji)" if self.show_jp_romaji else "Readings"
-            lines = [f"{reading_label}: on {on} | kun {kun}", f"Gloss: {jp_gloss}", "Words:"]
+            lines: list[str | tuple[str, set[int], int | None]] = [
+                f"{reading_label}: on {on} | kun {kun}",
+                f"Gloss: {jp_gloss}",
+                "Words:",
+            ]
             if not words:
                 lines.append("  (no examples found)")
             else:
-                rendered_words = []
                 for word_idx, (word, kana, gloss, rank) in enumerate(words[:5]):
                     reading = kana or "-"
                     if self.show_jp_romaji and kana:
@@ -2404,9 +2481,18 @@ class TuiApp:
                     line_row_idx = main_related_layout.jp_row_indexes[word_idx] if word_idx < len(main_related_layout.jp_row_indexes) else None
                     line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
                     marker = "▶" if line_active else " "
-                    display_word = self._mark_selected_glyph(word, selected_related_cp if line_active else None)
-                    rendered_words.append(f"{marker} {rank}. {display_word}  {reading}  {gloss or '-'}")
-                lines.extend(rendered_words)
+                    selectable = (
+                        set(main_related_layout.rows[line_row_idx])
+                        if line_row_idx is not None and line_row_idx < len(main_related_layout.rows)
+                        else set()
+                    )
+                    lines.append(
+                        (
+                            f"{marker} {rank}. {word}  {reading}  {gloss or '-'}",
+                            selectable,
+                            selected_related_cp if line_active else None,
+                        )
+                    )
             jp_focus = self.panel_focus == "jp"
             y = self._render_section(stdscr, y, w, "JP [1]", lines, highlighted=jp_focus) + 1
 
@@ -2429,21 +2515,23 @@ class TuiApp:
                     line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
                     marker = "▶" if line_active else " "
                     py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
-                    display_trad = self._mark_selected_glyph(trad, selected_related_cp if line_active else None)
-                    display_simp = self._mark_selected_glyph(simp, selected_related_cp if line_active else None)
-                    lines.append(f"{marker} {rank}. {display_trad}/{display_simp}  {py}  {gloss}")
+                    selectable = (
+                        set(main_related_layout.rows[line_row_idx])
+                        if line_row_idx is not None and line_row_idx < len(main_related_layout.rows)
+                        else set()
+                    )
+                    lines.append(
+                        (
+                            f"{marker} {rank}. {trad}/{simp}  {py}  {gloss}",
+                            selectable,
+                            selected_related_cp if line_active else None,
+                        )
+                    )
             cn_focus = self.panel_focus == "cn"
             y = self._render_section(stdscr, y, w, "CN [2]", lines, highlighted=cn_focus) + 1
 
         if self.show_sentences and y < h - 5:
             sentence_langs = self._sentence_langs()
-            sentence_limit = 6 if len(sentence_langs) > 1 else 3
-            sentence_rows = db_query.get_sentences(
-                self.conn,
-                detail["cp"],
-                limit=sentence_limit,
-                langs=sentence_langs,
-            )
             if not sentence_rows:
                 hint = "(no sentence examples)"
                 if self.derived_counts.get("sentences", 0) == 0:
@@ -2451,12 +2539,37 @@ class TuiApp:
                 lines = [hint]
             else:
                 lines = []
-                for lang, text, reading, gloss, source, license_name, rank in sentence_rows:
-                    line = f"{rank}. [{lang}] {text}  {reading or '-'}  {gloss or '-'}"
-                    lines.append(line)
+                for sent_idx, (lang, text, reading, gloss, source, license_name, rank) in enumerate(sentence_rows):
+                    line_row_idx = (
+                        main_related_layout.sentence_row_indexes[sent_idx]
+                        if sent_idx < len(main_related_layout.sentence_row_indexes)
+                        else None
+                    )
+                    line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
+                    marker = "▶" if line_active else " "
+                    selectable = (
+                        set(main_related_layout.rows[line_row_idx])
+                        if line_row_idx is not None and line_row_idx < len(main_related_layout.rows)
+                        else set()
+                    )
+                    lines.append(
+                        (
+                            f"{marker} {rank}. [{lang}] {text}  {reading or '-'}  {gloss or '-'}",
+                            selectable,
+                            selected_related_cp if line_active else None,
+                        )
+                    )
                     lines.append(f"   source: {source or '-'} ({license_name or '-'})")
             langs_label = "/".join(lang.upper() for lang in sentence_langs)
-            y = self._render_section(stdscr, y, w, f"Sentences [3] ({langs_label})", lines) + 1
+            sent_focus = self.panel_focus == "sentences"
+            y = self._render_section(
+                stdscr,
+                y,
+                w,
+                f"Sentences [3] ({langs_label})",
+                lines,
+                highlighted=sent_focus,
+            ) + 1
 
         if self.show_variants and y < h - 4:
             graph, targets = self._variant_data_for_current()

@@ -296,6 +296,8 @@ class GuiState:
             panels.append("jp")
         if self.show_cn:
             panels.append("cn")
+        if self.show_sentences:
+            panels.append("sentences")
         if self.show_variants:
             panels.append("variants")
         if not panels:

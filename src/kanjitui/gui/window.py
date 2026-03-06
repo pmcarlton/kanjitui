@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 import webbrowser
-from typing import Callable
+from typing import Callable, Sequence
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -1236,23 +1237,26 @@ class KanjiGuiWindow(QMainWindow):
         self._build_ui()
         self.refresh_view()
 
-    def _build_panel(self, title: str) -> tuple[QGroupBox, QPlainTextEdit]:
+    def _build_panel(self, title: str) -> tuple[QGroupBox, QTextEdit]:
         box = QGroupBox(title, self)
         box.setFont(ui_font(self, 16))
         layout = QVBoxLayout(box)
-        text = QPlainTextEdit(box)
+        text = QTextEdit(box)
         text.setReadOnly(True)
         text.setFont(ui_font(self, 16))
         text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        text.setAcceptRichText(True)
         layout.addWidget(text)
         return box, text
 
-    def _set_panel_text(self, widget: QPlainTextEdit, lines: list[str]) -> None:
-        widget.setPlainText("\n".join(lines))
+    def _set_panel_text(self, widget: QTextEdit, lines: list[str], html_lines: list[str] | None = None) -> None:
+        if html_lines is None:
+            html_lines = [html.escape(line) for line in lines]
+        widget.setHtml("<br/>".join(html_lines))
         fm = QFontMetrics(widget.font())
-        content_w = max(140, widget.viewport().width() - 10)
+        content_w = max(140, widget.viewport().width() - 16)
         visual_lines = 0
         source_lines = lines if lines else [""]
         for line in source_lines:
@@ -1487,14 +1491,24 @@ class KanjiGuiWindow(QMainWindow):
         )
 
     @staticmethod
-    def _mark_selected_glyph(text: str, selected_cp: int | None) -> str:
-        if selected_cp is None:
-            return text
-        glyph = chr(selected_cp)
-        idx = text.find(glyph)
-        if idx < 0:
-            return text
-        return text[:idx] + "[" + glyph + "]" + text[idx + 1 :]
+    def _render_selectable_text(
+        text: str,
+        selectable: set[int] | None = None,
+        selected_cp: int | None = None,
+    ) -> str:
+        selectable_set = selectable or set()
+        parts: list[str] = []
+        for ch in text:
+            cp = ord(ch)
+            escaped = html.escape(ch)
+            if cp not in selectable_set:
+                parts.append(escaped)
+                continue
+            style = "color:#00a0ff;text-decoration:underline;"
+            if selected_cp is not None and cp == selected_cp:
+                style += "font-weight:700;background:#dff3ff;"
+            parts.append(f'<span style="{style}">{escaped}</span>')
+        return "".join(parts)
 
     def _current_detail(self) -> dict | None:
         cp = self.state.current_cp
@@ -1538,13 +1552,35 @@ class KanjiGuiWindow(QMainWindow):
         self.state.jump_to_cp(selected.cp)
         return True
 
-    def _main_related_layout(self, detail: dict) -> RelatedRowsLayout:
+    def _main_related_layout(
+        self,
+        detail: dict,
+        sentence_rows: Sequence[tuple[str, str, str | None, str | None, str | None, str | None, int]] | None = None,
+    ) -> RelatedRowsLayout:
+        if sentence_rows is None:
+            sentence_rows = self._sentence_rows_for_detail(detail)
+        sentence_texts = (
+            [text for _lang, text, _reading, _gloss, _source, _license, _rank in sentence_rows]
+            if self.state.show_sentences
+            else []
+        )
         return build_related_rows_layout(
             current_cp=int(detail["cp"]),
             jp_words=detail["jp_words"],
             cn_words=detail["cn_words"],
+            sentence_texts=sentence_texts,
             allowed=None,
         )
+
+    def _sentence_rows_for_detail(
+        self,
+        detail: dict,
+    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None, int]]:
+        cp = int(detail["cp"])
+        langs = self.state.sentence_langs()
+        sent_limit = 6 if len(langs) > 1 else 3
+        rows = db_query.get_sentences(self.state.conn, cp, limit=sent_limit, langs=langs)
+        return rows
 
     def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
         rows: list[list[int]] = []
@@ -2019,7 +2055,8 @@ class KanjiGuiWindow(QMainWindow):
 
         self.glyph_label.setText(detail["ch"])
         self.glyph_meta.setText(f"U+{cp:04X}")
-        main_related_layout = self._main_related_layout(detail)
+        sent_rows = self._sentence_rows_for_detail(detail)
+        main_related_layout = self._main_related_layout(detail, sentence_rows=sent_rows)
         selected_related_cp = self._selected_related_cp_for_detail(detail)
         active_main_row_idx: int | None = None
         if not self.state.show_phonetic and main_related_layout.rows:
@@ -2035,6 +2072,7 @@ class KanjiGuiWindow(QMainWindow):
         kun = " ".join(kun_parts) if kun_parts else "(none)"
         jp_gloss = "; ".join(detail["jp_gloss"][:3]) if detail["jp_gloss"] else "(none)"
         jp_lines = [f"Readings{' (romaji)' if self.state.show_jp_romaji else ''}: on {on} | kun {kun}", f"Gloss: {jp_gloss}", "Words:"]
+        jp_html = [html.escape(line) for line in jp_lines]
         if detail["jp_words"]:
             for word_idx, (word, kana, gloss, rank) in enumerate(detail["jp_words"][:5]):
                 reading = kana or "-"
@@ -2043,11 +2081,24 @@ class KanjiGuiWindow(QMainWindow):
                 line_row_idx = main_related_layout.jp_row_indexes[word_idx] if word_idx < len(main_related_layout.jp_row_indexes) else None
                 line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
                 marker = "▶" if line_active else " "
-                display_word = self._mark_selected_glyph(word, selected_related_cp if line_active else None)
-                jp_lines.append(f"{marker} {rank}. {display_word}  {reading}  {gloss or '-'}")
+                selectable = (
+                    set(main_related_layout.rows[line_row_idx])
+                    if line_row_idx is not None and line_row_idx < len(main_related_layout.rows)
+                    else set()
+                )
+                styled_word = self._render_selectable_text(
+                    word,
+                    selectable=selectable,
+                    selected_cp=selected_related_cp if line_active else None,
+                )
+                jp_lines.append(f"{marker} {rank}. {word}  {reading}  {gloss or '-'}")
+                jp_html.append(
+                    f"{html.escape(marker)} {rank}. {styled_word}  {html.escape(reading)}  {html.escape(gloss or '-')}"
+                )
         else:
             jp_lines.append("  (no examples found)")
-        self._set_panel_text(self.jp_text, jp_lines)
+            jp_html.append(html.escape("  (no examples found)"))
+        self._set_panel_text(self.jp_text, jp_lines, html_lines=jp_html)
 
         if detail["cn_readings"]:
             readings = "  ".join(
@@ -2058,37 +2109,77 @@ class KanjiGuiWindow(QMainWindow):
             readings = "(none)"
         cn_gloss = "; ".join(detail["cn_gloss"][:3]) if detail["cn_gloss"] else "(none)"
         cn_lines = [f"Readings: {readings}", f"Gloss: {cn_gloss}", "Words:"]
+        cn_html = [html.escape(line) for line in cn_lines]
         if detail["cn_words"]:
             for word_idx, (trad, simp, marked, numbered, gloss, rank) in enumerate(detail["cn_words"][:5]):
                 py = marked or search_normalize.pinyin_numbered_to_marked(numbered or "") or "-"
                 line_row_idx = main_related_layout.cn_row_indexes[word_idx] if word_idx < len(main_related_layout.cn_row_indexes) else None
                 line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
                 marker = "▶" if line_active else " "
-                display_trad = self._mark_selected_glyph(trad, selected_related_cp if line_active else None)
-                display_simp = self._mark_selected_glyph(simp, selected_related_cp if line_active else None)
-                cn_lines.append(f"{marker} {rank}. {display_trad}/{display_simp}  {py}  {gloss}")
+                selectable = (
+                    set(main_related_layout.rows[line_row_idx])
+                    if line_row_idx is not None and line_row_idx < len(main_related_layout.rows)
+                    else set()
+                )
+                styled_trad = self._render_selectable_text(
+                    trad,
+                    selectable=selectable,
+                    selected_cp=selected_related_cp if line_active else None,
+                )
+                styled_simp = self._render_selectable_text(
+                    simp,
+                    selectable=selectable,
+                    selected_cp=selected_related_cp if line_active else None,
+                )
+                cn_lines.append(f"{marker} {rank}. {trad}/{simp}  {py}  {gloss}")
+                cn_html.append(
+                    f"{html.escape(marker)} {rank}. {styled_trad}/{styled_simp}  {html.escape(py)}  {html.escape(gloss)}"
+                )
         else:
             cn_lines.append("  (no examples found)")
-        self._set_panel_text(self.cn_text, cn_lines)
+            cn_html.append(html.escape("  (no examples found)"))
+        self._set_panel_text(self.cn_text, cn_lines, html_lines=cn_html)
 
         langs = self.state.sentence_langs()
-        sent_limit = 6 if len(langs) > 1 else 3
-        sent_rows = db_query.get_sentences(self.state.conn, cp, limit=sent_limit, langs=langs)
         sent_lines: list[str] = []
+        sent_html: list[str] = []
         if sent_rows:
-            for lang, text, reading, gloss, source, license_name, rank in sent_rows:
-                sent_lines.append(f"{rank}. [{lang}] {text}  {reading or '-'}  {gloss or '-'}")
+            for sent_idx, (lang, text, reading, gloss, source, license_name, rank) in enumerate(sent_rows):
+                line_row_idx = (
+                    main_related_layout.sentence_row_indexes[sent_idx]
+                    if sent_idx < len(main_related_layout.sentence_row_indexes)
+                    else None
+                )
+                line_active = active_main_row_idx is not None and line_row_idx == active_main_row_idx
+                marker = "▶" if line_active else " "
+                selectable = (
+                    set(main_related_layout.rows[line_row_idx])
+                    if line_row_idx is not None and line_row_idx < len(main_related_layout.rows)
+                    else set()
+                )
+                styled_sentence = self._render_selectable_text(
+                    text,
+                    selectable=selectable,
+                    selected_cp=selected_related_cp if line_active else None,
+                )
+                sent_lines.append(f"{marker} {rank}. [{lang}] {text}  {reading or '-'}  {gloss or '-'}")
+                sent_html.append(
+                    f"{html.escape(marker)} {rank}. [{html.escape(lang)}] {styled_sentence}  "
+                    f"{html.escape(reading or '-')}  {html.escape(gloss or '-')}"
+                )
                 sent_lines.append(f"   source: {source or '-'} ({license_name or '-'})")
+                sent_html.append(html.escape(f"   source: {source or '-'} ({license_name or '-'})"))
         else:
             hint = "(no sentence examples)"
             if self.state.derived_counts.get("sentences", 0) == 0:
                 hint = "(no sentence examples; add sentences provider and rebuild DB)"
             sent_lines = [hint]
+            sent_html = [html.escape(hint)]
         langs_label = "/".join(lang.upper() for lang in langs)
         self.jp_group.setTitle("JP [1]")
         self.cn_group.setTitle("CN [2]")
         self.sent_group.setTitle(f"Sentences [3] ({langs_label})")
-        self._set_panel_text(self.sent_text, sent_lines)
+        self._set_panel_text(self.sent_text, sent_lines, html_lines=sent_html)
 
         graph, targets = self._variant_data_for(cp)
         self.var_group.setTitle("Variants [4]")
@@ -2116,10 +2207,11 @@ class KanjiGuiWindow(QMainWindow):
         self.state.ensure_panel_focus_valid()
         jp_focus = self.state.panel_focus == "jp"
         cn_focus = self.state.panel_focus == "cn"
+        sent_focus = self.state.panel_focus == "sentences"
         var_focus = self.state.panel_focus == "variants"
         self.jp_group.setStyleSheet(self._focus_style(jp_focus))
         self.cn_group.setStyleSheet(self._focus_style(cn_focus))
-        self.sent_group.setStyleSheet(self._focus_style(False))
+        self.sent_group.setStyleSheet(self._focus_style(sent_focus))
         self.var_group.setStyleSheet(self._focus_style(var_focus))
 
         stroke_available = self.stroke_repo.has_char(detail["ch"])
@@ -2505,6 +2597,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.ensure_panel_focus_valid()
         elif text == "3":
             self.state.show_sentences = not self.state.show_sentences
+            self.state.ensure_panel_focus_valid()
         elif text in ("4", "v", "V"):
             self.state.show_variants = not self.state.show_variants
             self.state.ensure_panel_focus_valid()

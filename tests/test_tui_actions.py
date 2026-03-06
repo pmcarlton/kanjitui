@@ -556,6 +556,26 @@ def test_phonetic_rows_participate_in_related_selection(tmp_path: Path, monkeypa
         conn.close()
 
 
+def test_sentence_rows_participate_in_related_selection_when_panel_visible(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        if 0x4E0D in app.ordered_cps:
+            app.pos = app.ordered_cps.index(0x4E0D)
+        detail = db_query.get_char_detail(app.conn, app.current_cp or 0x4E0D)
+
+        app.show_sentences = True
+        rows_with_sent = app._related_rows_for_detail(detail, include_phonetic=False)
+        assert rows_with_sent
+
+        app.show_sentences = False
+        rows_without_sent = app._related_rows_for_detail(detail, include_phonetic=False)
+        assert len(rows_without_sent) <= len(rows_with_sent)
+    finally:
+        conn.close()
+
+
 def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)
