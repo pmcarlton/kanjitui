@@ -22,7 +22,7 @@ from kanjitui.font_warning import (
     font_warning_lines,
     startup_status_line,
 )
-from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
+from kanjitui.filtering import FilterData, FilterState, apply_filter_state, filter_group_specs
 from kanjitui.related_nav import (
     RelatedRowsLayout,
     build_related_rows_layout,
@@ -92,10 +92,15 @@ class TuiApp:
         if self.user_store is not None:
             self._refresh_bookmark_cache()
         self.derived_counts = db_query.derived_data_counts(conn)
-        self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(conn)
+        self.total_char_count = db_query.total_char_count(conn)
+        self._jp_reading_cps: set[int] = set()
+        self._cn_reading_cps: set[int] = set()
+        self._reading_sets_loaded = False
         self.filter_state = FilterState()
-        self.filter_data = db_query.load_filter_data(conn)
-        self.cp_radical_map = db_query.cp_to_radical_map(conn)
+        self._filter_data: FilterData | None = None
+        self._filter_data_loaded = False
+        self.cp_radical_map: dict[int, int] = {}
+        self._radical_map_loaded = False
 
         self.focus = "jp"
         self.panel_focus = "jp"
@@ -239,6 +244,23 @@ class TuiApp:
             return None
         return self.freq_profiles[self.freq_profile_idx]
 
+    @property
+    def jp_reading_cps(self) -> set[int]:
+        self._ensure_reading_sets_loaded()
+        return self._jp_reading_cps
+
+    @property
+    def cn_reading_cps(self) -> set[int]:
+        self._ensure_reading_sets_loaded()
+        return self._cn_reading_cps
+
+    @property
+    def filter_data(self) -> FilterData:
+        self._ensure_filter_data_loaded()
+        if self._filter_data is None:
+            return FilterData()
+        return self._filter_data
+
     def _reading_filter_scope(self) -> str:
         if ORDERINGS[self.ordering_idx] == "reading":
             return self.focus
@@ -268,6 +290,7 @@ class TuiApp:
         ordered = base_ordered
         allowed: set[int] | None = None
         if self.hide_no_reading:
+            self._ensure_reading_sets_loaded()
             scope = self._reading_filter_scope()
             if scope == "jp":
                 allowed = self.jp_reading_cps
@@ -276,12 +299,14 @@ class TuiApp:
             else:
                 allowed = self.jp_reading_cps | self.cn_reading_cps
             ordered = [cp for cp in ordered if cp in allowed]
-        ordered = apply_filter_state(
-            ordered,
-            self.filter_state,
-            self.filter_data,
-            default_frequency_profile=self.current_freq_profile,
-        )
+        if self.filter_state.is_active():
+            self._ensure_filter_data_loaded()
+            ordered = apply_filter_state(
+                ordered,
+                self.filter_state,
+                self.filter_data,
+                default_frequency_profile=self.current_freq_profile,
+            )
         self.ordered_cps = ordered
         self._refresh_radical_availability()
         if current is None or not self.ordered_cps:
@@ -303,6 +328,12 @@ class TuiApp:
             self.pos = 0
 
     def _refresh_radical_availability(self) -> None:
+        if not self.ordered_cps:
+            self.radical_available_numbers = set()
+            return
+        if not self._radical_map_loaded:
+            self.radical_available_numbers = set(self.radical_numbers)
+            return
         available: set[int] = set()
         for cp in self.ordered_cps:
             radical = self.cp_radical_map.get(cp)
@@ -310,7 +341,27 @@ class TuiApp:
                 available.add(radical)
         self.radical_available_numbers = available
 
+    def _ensure_reading_sets_loaded(self) -> None:
+        if self._reading_sets_loaded:
+            return
+        self._jp_reading_cps, self._cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self._reading_sets_loaded = True
+
+    def _ensure_filter_data_loaded(self) -> None:
+        if self._filter_data_loaded:
+            return
+        self._filter_data = db_query.load_filter_data(self.conn)
+        self._filter_data_loaded = True
+
+    def _ensure_radical_map_loaded(self) -> None:
+        if self._radical_map_loaded:
+            return
+        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
+        self._radical_map_loaded = True
+
     def _radical_is_available(self, radical: int) -> bool:
+        self._ensure_radical_map_loaded()
+        self._refresh_radical_availability()
         return radical in self.radical_available_numbers
 
     def _radical_name_info(self, radical: int) -> tuple[str, str, str, str]:
@@ -739,9 +790,14 @@ class TuiApp:
     def _reload_db_state(self, current_cp: int | None = None) -> None:
         self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
         self.derived_counts = db_query.derived_data_counts(self.conn)
-        self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
-        self.filter_data = db_query.load_filter_data(self.conn)
-        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
+        self.total_char_count = db_query.total_char_count(self.conn)
+        self._jp_reading_cps = set()
+        self._cn_reading_cps = set()
+        self._reading_sets_loaded = False
+        self._filter_data = None
+        self._filter_data_loaded = False
+        self.cp_radical_map = {}
+        self._radical_map_loaded = False
         self._radical_name_cache = {}
         self.freq_profiles = db_query.available_frequency_profiles(self.conn)
         if self.freq_profiles:
@@ -1299,7 +1355,7 @@ class TuiApp:
             version=__version__,
             build_meta=self.build_meta,
             runtime_font=self.runtime_font,
-            total_glyphs=len(self.filter_data.all_cps),
+            total_glyphs=self.total_char_count,
             visible_glyphs=len(self.ordered_cps),
         )
 
@@ -1539,6 +1595,8 @@ class TuiApp:
             self.search_idx = 0
             return True
         if key in (ord("r"),):
+            self._ensure_radical_map_loaded()
+            self._refresh_radical_availability()
             self.radical_open = True
             self.radical_results = None
             self.radical_result_idx = 0
@@ -2438,7 +2496,7 @@ class TuiApp:
 
         cp = self.current_cp
         if cp is None:
-            total_chars = len(self.filter_data.all_cps)
+            total_chars = self.total_char_count
             if total_chars > 0:
                 self._safe_add(stdscr, 0, 0, "No characters match current filters.")
                 menu_line = "Filter:f (c clears)  Quick filter:N  Setup:S  Advanced:R  Ack:A  Help:?  Quit:q"

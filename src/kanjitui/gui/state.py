@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from kanjitui.db import query as db_query
 from kanjitui.db.user import UserStore
-from kanjitui.filtering import FilterState, apply_filter_state
+from kanjitui.filtering import FilterData, FilterState, apply_filter_state
 from kanjitui.search.query import SearchEngine
 from kanjitui.tui.navigation import move_grid_index
 from kanjitui.tui.radicals import (
@@ -37,10 +37,15 @@ class GuiState:
             self.refresh_bookmark_cache()
 
         self.derived_counts = db_query.derived_data_counts(self.conn)
-        self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self.total_char_count = db_query.total_char_count(self.conn)
+        self._jp_reading_cps: set[int] = set()
+        self._cn_reading_cps: set[int] = set()
+        self._reading_sets_loaded = False
         self.filter_state = FilterState()
-        self.filter_data = db_query.load_filter_data(self.conn)
-        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
+        self._filter_data: FilterData | None = None
+        self._filter_data_loaded = False
+        self.cp_radical_map: dict[int, int] = {}
+        self._radical_map_loaded = False
 
         self.focus = "jp"
         self.panel_focus = "jp"
@@ -92,9 +97,14 @@ class GuiState:
     def reload_db_state(self, current_cp: int | None = None) -> None:
         self.search_engine = SearchEngine(self.conn, normalizer_name=self.normalizer_name)
         self.derived_counts = db_query.derived_data_counts(self.conn)
-        self.jp_reading_cps, self.cn_reading_cps = db_query.reading_cp_sets(self.conn)
-        self.filter_data = db_query.load_filter_data(self.conn)
-        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
+        self.total_char_count = db_query.total_char_count(self.conn)
+        self._jp_reading_cps = set()
+        self._cn_reading_cps = set()
+        self._reading_sets_loaded = False
+        self._filter_data = None
+        self._filter_data_loaded = False
+        self.cp_radical_map = {}
+        self._radical_map_loaded = False
         self._radical_name_cache = {}
         self.freq_profiles = db_query.available_frequency_profiles(self.conn)
         if self.freq_profiles:
@@ -125,6 +135,23 @@ class GuiState:
             return None
         return self.freq_profiles[self.freq_profile_idx]
 
+    @property
+    def jp_reading_cps(self) -> set[int]:
+        self._ensure_reading_sets_loaded()
+        return self._jp_reading_cps
+
+    @property
+    def cn_reading_cps(self) -> set[int]:
+        self._ensure_reading_sets_loaded()
+        return self._cn_reading_cps
+
+    @property
+    def filter_data(self) -> FilterData:
+        self._ensure_filter_data_loaded()
+        if self._filter_data is None:
+            return FilterData()
+        return self._filter_data
+
     def reading_filter_scope(self) -> str:
         if ORDERINGS[self.ordering_idx] == "reading":
             return self.focus
@@ -149,6 +176,7 @@ class GuiState:
         ordered = base_ordered
         allowed: set[int] | None = None
         if self.hide_no_reading:
+            self._ensure_reading_sets_loaded()
             scope = self.reading_filter_scope()
             if scope == "jp":
                 allowed = self.jp_reading_cps
@@ -157,12 +185,14 @@ class GuiState:
             else:
                 allowed = self.jp_reading_cps | self.cn_reading_cps
             ordered = [cp for cp in ordered if cp in allowed]
-        ordered = apply_filter_state(
-            ordered,
-            self.filter_state,
-            self.filter_data,
-            default_frequency_profile=self.current_freq_profile,
-        )
+        if self.filter_state.is_active():
+            self._ensure_filter_data_loaded()
+            ordered = apply_filter_state(
+                ordered,
+                self.filter_state,
+                self.filter_data,
+                default_frequency_profile=self.current_freq_profile,
+            )
         self.ordered_cps = ordered
         self._refresh_radical_availability()
         if current is None or not self.ordered_cps:
@@ -190,6 +220,12 @@ class GuiState:
         )
 
     def _refresh_radical_availability(self) -> None:
+        if not self.ordered_cps:
+            self.radical_available_numbers = set()
+            return
+        if not self._radical_map_loaded:
+            self.radical_available_numbers = set(self.radical_numbers)
+            return
         available: set[int] = set()
         for cp in self.ordered_cps:
             radical = self.cp_radical_map.get(cp)
@@ -197,8 +233,32 @@ class GuiState:
                 available.add(radical)
         self.radical_available_numbers = available
 
+    def _ensure_reading_sets_loaded(self) -> None:
+        if self._reading_sets_loaded:
+            return
+        self._jp_reading_cps, self._cn_reading_cps = db_query.reading_cp_sets(self.conn)
+        self._reading_sets_loaded = True
+
+    def _ensure_filter_data_loaded(self) -> None:
+        if self._filter_data_loaded:
+            return
+        self._filter_data = db_query.load_filter_data(self.conn)
+        self._filter_data_loaded = True
+
+    def _ensure_radical_map_loaded(self) -> None:
+        if self._radical_map_loaded:
+            return
+        self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
+        self._radical_map_loaded = True
+
     def radical_is_available(self, radical: int) -> bool:
+        self._ensure_radical_map_loaded()
+        self._refresh_radical_availability()
         return radical in self.radical_available_numbers
+
+    def prepare_radical_browser(self) -> None:
+        self._ensure_radical_map_loaded()
+        self._refresh_radical_availability()
 
     def radical_name_info(self, radical: int) -> tuple[str, str, str, str]:
         cached = self._radical_name_cache.get(radical)
@@ -227,15 +287,19 @@ class GuiState:
         return f"#{radical} {kangxi_radical_glyph(radical)} ({base})  EN:{en}  JP:{jp}  CN:{cn}"
 
     def _radical_filtered_results(self, radical: int, stroke_filter: int | None = None) -> list[int]:
+        self._ensure_radical_map_loaded()
+        self._refresh_radical_availability()
         rows = db_query.cps_by_radical(self.conn, radical, stroke_filter=stroke_filter)
         if not rows:
             return []
         allowed = set(self.ordered_cps)
         return [cp for cp in rows if cp in allowed]
 
-    def preview_filter_count(self, state: FilterState) -> int:
+    def preview_filter_count(self, state: FilterState, hide_no_reading: bool | None = None) -> int:
         ordered = self.base_ordered_cps()
-        if self.hide_no_reading:
+        hide = self.hide_no_reading if hide_no_reading is None else bool(hide_no_reading)
+        if hide:
+            self._ensure_reading_sets_loaded()
             scope = self.reading_filter_scope()
             if scope == "jp":
                 allowed = self.jp_reading_cps
@@ -244,12 +308,14 @@ class GuiState:
             else:
                 allowed = self.jp_reading_cps | self.cn_reading_cps
             ordered = [cp for cp in ordered if cp in allowed]
-        ordered = apply_filter_state(
-            ordered,
-            state,
-            self.filter_data,
-            default_frequency_profile=self.current_freq_profile,
-        )
+        if state.is_active():
+            self._ensure_filter_data_loaded()
+            ordered = apply_filter_state(
+                ordered,
+                state,
+                self.filter_data,
+                default_frequency_profile=self.current_freq_profile,
+            )
         return len(ordered)
 
     def set_filter_state(self, state: FilterState) -> None:
@@ -515,6 +581,7 @@ class GuiState:
         return f"http://ccamc.org/cjkv.php?cjkv={quote(ch)}"
 
     def radical_pick(self, index: int) -> None:
+        self._refresh_radical_availability()
         idx = max(0, min(index, len(self.radical_numbers) - 1))
         self.radical_idx = idx
         radical = self.radical_numbers[self.radical_idx]

@@ -23,6 +23,11 @@ def available_frequency_profiles(conn: sqlite3.Connection) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
+def total_char_count(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM chars").fetchone()
+    return int(row[0]) if row is not None else 0
+
+
 def get_ordered_cps(
     conn: sqlite3.Connection,
     ordering: str,

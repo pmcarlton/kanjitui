@@ -52,7 +52,7 @@ from kanjitui.font_warning import (
     font_warning_lines,
     startup_status_line,
 )
-from kanjitui.filtering import FilterState, apply_filter_state, filter_group_specs
+from kanjitui.filtering import FilterState, filter_group_specs
 from kanjitui.gui.state import GuiState, ORDERINGS
 from kanjitui.related_nav import (
     RelatedRowsLayout,
@@ -855,23 +855,7 @@ class FilterDialog(QDialog):
         return FilterState.from_payload(payload)
 
     def _preview_count(self, candidate: FilterState) -> int:
-        ordered = self.state.base_ordered_cps()
-        if self.hide_no_reading.isChecked():
-            scope = self.state.reading_filter_scope()
-            if scope == "jp":
-                allowed = self.state.jp_reading_cps
-            elif scope == "cn":
-                allowed = self.state.cn_reading_cps
-            else:
-                allowed = self.state.jp_reading_cps | self.state.cn_reading_cps
-            ordered = [cp for cp in ordered if cp in allowed]
-        ordered = apply_filter_state(
-            ordered,
-            candidate,
-            self.state.filter_data,
-            default_frequency_profile=self.state.current_freq_profile,
-        )
-        return len(ordered)
+        return self.state.preview_filter_count(candidate, hide_no_reading=self.hide_no_reading.isChecked())
 
     def _update_preview(self) -> None:
         candidate = self._state_from_ui()
@@ -1549,7 +1533,7 @@ class KanjiGuiWindow(QMainWindow):
             version=__version__,
             build_meta=self.build_meta,
             runtime_font=self.runtime_font,
-            total_glyphs=len(self.state.filter_data.all_cps),
+            total_glyphs=self.state.total_char_count,
             visible_glyphs=len(self.state.ordered_cps),
         )
 
@@ -2125,7 +2109,7 @@ class KanjiGuiWindow(QMainWindow):
     def refresh_view(self) -> None:
         detail = self._current_detail()
         if detail is None:
-            total_chars = len(self.state.filter_data.all_cps)
+            total_chars = self.state.total_char_count
             if total_chars > 0:
                 self.header_label.setText("No characters match current filters.")
                 self.menu_label.setText("Filter:f  Quick:N  Setup:S  Advanced:R  Ack:A  Help:?  Quit:q")
@@ -2360,6 +2344,7 @@ class KanjiGuiWindow(QMainWindow):
         self.refresh_view()
 
     def _open_radicals(self) -> None:
+        self.state.prepare_radical_browser()
         dlg = RadicalDialog(self.state, self)
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_cp is not None:
             self.state.jump_to_cp(dlg.selected_cp)
