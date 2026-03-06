@@ -358,10 +358,10 @@ class TuiApp:
             return
         self.cp_radical_map = db_query.cp_to_radical_map(self.conn)
         self._radical_map_loaded = True
+        self._refresh_radical_availability()
 
     def _radical_is_available(self, radical: int) -> bool:
         self._ensure_radical_map_loaded()
-        self._refresh_radical_availability()
         return radical in self.radical_available_numbers
 
     def _radical_name_info(self, radical: int) -> tuple[str, str, str, str]:
