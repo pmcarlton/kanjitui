@@ -11,7 +11,7 @@ import webbrowser
 from typing import Callable, Sequence
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QFontMetrics, QKeyEvent, QKeySequence, QShortcut, QPainter, QPen, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -135,14 +135,46 @@ class LiveTextDialog(QDialog):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QVBoxLayout(self)
-        self.text = QPlainTextEdit(self)
+        self.text = QTextEdit(self)
         self.text.setReadOnly(True)
         self.text.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.text.setFont(ui_font(self, 14))
         layout.addWidget(self.text)
+        self._last_plain_text = ""
+        self._last_html_text = ""
 
-    def set_lines(self, lines: list[str]) -> None:
-        self.text.setPlainText("\n".join(lines))
+    def set_lines(
+        self,
+        lines: list[str],
+        *,
+        html_lines: list[str] | None = None,
+        selected_line: int | None = None,
+        auto_follow_selection: bool = False,
+    ) -> None:
+        bar = self.text.verticalScrollBar()
+        prev_scroll = bar.value()
+        if html_lines:
+            body = "<br/>".join(html_lines)
+            payload = f"<pre style=\"margin:0;\">{body}</pre>"
+            if payload != self._last_html_text:
+                self.text.setHtml(payload)
+                self._last_html_text = payload
+                self._last_plain_text = ""
+        else:
+            payload = "\n".join(lines)
+            if payload != self._last_plain_text:
+                self.text.setPlainText(payload)
+                self._last_plain_text = payload
+                self._last_html_text = ""
+
+        if auto_follow_selection and selected_line is not None:
+            block = self.text.document().findBlockByNumber(max(0, selected_line))
+            if block.isValid():
+                cursor = QTextCursor(block)
+                self.text.setTextCursor(cursor)
+                self.text.ensureCursorVisible()
+        else:
+            bar.setValue(min(prev_scroll, bar.maximum()))
 
     def set_close_behavior(self, close_keys: set[str] | None, close_on_any_key: bool) -> None:
         self._close_keys = close_keys or set()
@@ -1898,6 +1930,9 @@ class KanjiGuiWindow(QMainWindow):
         enabled: bool,
         title: str,
         lines: list[str],
+        html_lines: list[str] | None = None,
+        selected_line: int | None = None,
+        auto_follow_selection: bool = False,
         on_close: Callable[[], None] | None = None,
         close_keys: set[str] | None = None,
         close_on_any_key: bool = False,
@@ -1932,7 +1967,12 @@ class KanjiGuiWindow(QMainWindow):
         dlg.setWindowTitle(title)
         dlg.set_close_behavior(close_keys=close_keys, close_on_any_key=close_on_any_key)
         dlg.set_on_key(on_key)
-        dlg.set_lines(lines)
+        dlg.set_lines(
+            lines,
+            html_lines=html_lines,
+            selected_line=selected_line,
+            auto_follow_selection=auto_follow_selection,
+        )
         dlg.raise_()
         dlg.activateWindow()
         dlg.setFocus()
@@ -1996,6 +2036,7 @@ class KanjiGuiWindow(QMainWindow):
 
         ph = db_query.get_phonetic_series(self.state.conn, cp, limit=120)
         ph_lines: list[str] = []
+        ph_html_lines: list[str] = []
         for idx, (member_cp, member_ch, key, pinyin_marked, pinyin_numbered) in enumerate(ph):
             pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(pinyin_numbered)
             marker = "▶" if idx == self.state.related_row_idx else " "
@@ -2003,13 +2044,27 @@ class KanjiGuiWindow(QMainWindow):
             if pinyin:
                 row += f"  {pinyin}"
             ph_lines.append(row)
+            glyph_html = html.escape(member_ch)
+            if idx == self.state.related_row_idx:
+                glyph_html = f"<span style='color:#00a0ff; font-weight:700;'>{glyph_html}</span>"
+            row_html = (
+                f"{html.escape(marker)} {idx + 1}. {glyph_html} "
+                f"U+{member_cp:04X} [{html.escape(key)}]"
+            )
+            if pinyin:
+                row_html += f"  {html.escape(pinyin)}"
+            ph_html_lines.append(row_html)
         if not ph_lines:
             ph_lines = ["(no phonetic series rows)"]
+            ph_html_lines = [html.escape("(no phonetic series rows)")]
         self._sync_overlay(
             "phonetic",
             self.state.show_phonetic,
             "Phonetic Series",
             ph_lines,
+            html_lines=ph_html_lines,
+            selected_line=self.state.related_row_idx if ph else None,
+            auto_follow_selection=True,
             on_close=lambda: setattr(self.state, "show_phonetic", False),
             close_keys={"s", "S"},
             on_key=self._handle_phonetic_overlay_key,
