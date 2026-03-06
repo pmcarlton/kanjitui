@@ -85,7 +85,7 @@ def test_menu_actions_smoke(tmp_path: Path, monkeypatch) -> None:
         assert app.bookmark_reveal_mode == "gloss"
         assert app._handle_bookmark_key(curses.KEY_DOWN) is True
         assert app.bookmark_reveal_mode == "none"
-        assert app._handle_bookmark_key(curses.KEY_DC) is True
+        assert app._handle_bookmark_key(127) is True
         if app.bookmark_open:
             assert app._handle_bookmark_key(curses.KEY_HOME) is True
             assert app._handle_bookmark_key(10) is True

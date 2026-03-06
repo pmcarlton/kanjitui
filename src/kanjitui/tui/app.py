@@ -2295,7 +2295,7 @@ class TuiApp:
             self.bookmark_idx = 0
             self.bookmark_reveal_mode = "none"
             return True
-        if key in (curses.KEY_DC, getattr(curses, "KEY_DL", -1)) and self.user_store is not None:
+        if key in (curses.KEY_DC, getattr(curses, "KEY_DL", -1), curses.KEY_BACKSPACE, 127, 8) and self.user_store is not None:
             cp, _tag = self.bookmark_rows[self.bookmark_idx]
             deleted = self.user_store.delete_bookmark(cp, set_name=self.active_bookmark_set)
             if deleted:

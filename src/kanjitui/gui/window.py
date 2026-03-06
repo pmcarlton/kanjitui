@@ -334,7 +334,7 @@ class BookmarkDialog(QDialog):
 
         # Ensure delete works regardless of which child widget currently has focus.
         self._bookmarks_shortcuts: list[QShortcut] = []
-        for sequence in ("Del",):
+        for sequence in ("Del", "Backspace"):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(self.delete_selected)
@@ -544,7 +544,7 @@ class BookmarkDialog(QDialog):
             self.reveal_mode = "gloss"
             self._update_study_reveal()
             return
-        if key == Qt.Key.Key_Delete:
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.delete_selected()
             return
         super().keyPressEvent(event)
