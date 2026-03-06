@@ -637,6 +637,31 @@ def test_tab_focus_moves_related_indicator_to_top_of_panel(tmp_path: Path) -> No
         conn.close()
 
 
+def test_variants_focus_not_overridden_by_related_sync(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        if 0x4E0D in app.ordered_cps:
+            app.pos = app.ordered_cps.index(0x4E0D)
+        app.show_jp = True
+        app.show_cn = True
+        app.show_sentences = True
+        app.show_variants = True
+        app.panel_focus = "variants"
+        app.related_row_idx = 0
+        app.related_col_idx = 0
+        detail = db_query.get_char_detail(app.conn, app.current_cp or 0x4E0D)
+
+        _ = app._selected_related_cp(detail, include_phonetic=False)
+        assert app.panel_focus == "variants"
+
+        _ = app._move_related_selection_horizontal(+1)
+        assert app.panel_focus == "variants"
+    finally:
+        conn.close()
+
+
 def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)

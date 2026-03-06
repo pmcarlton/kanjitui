@@ -1056,7 +1056,7 @@ class TuiApp:
             self.related_col_idx = 0
             return None
         self.related_row_idx = max(0, min(self.related_row_idx, len(rows) - 1))
-        if include_phonetic is None and not self.show_phonetic:
+        if include_phonetic is None and not self.show_phonetic and self.panel_focus != "variants":
             self._set_panel_focus_from_related_row(detail, self.related_row_idx)
         row = rows[self.related_row_idx]
         self.related_col_idx = max(0, min(self.related_col_idx, len(row) - 1))
@@ -1077,7 +1077,7 @@ class TuiApp:
             self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.related_row_idx = (self.related_row_idx + delta) % len(rows)
-        if not self.show_phonetic:
+        if not self.show_phonetic and self.panel_focus != "variants":
             self._set_panel_focus_from_related_row(detail, self.related_row_idx)
         row = rows[self.related_row_idx]
         self.related_col_idx = min(self.related_col_idx, len(row) - 1)
@@ -1103,7 +1103,7 @@ class TuiApp:
             self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.related_row_idx = max(0, min(self.related_row_idx, len(rows) - 1))
-        if not self.show_phonetic:
+        if not self.show_phonetic and self.panel_focus != "variants":
             self._set_panel_focus_from_related_row(detail, self.related_row_idx)
         row = rows[self.related_row_idx]
         if len(row) <= 1:

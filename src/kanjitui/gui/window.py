@@ -1677,7 +1677,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.related_col_idx = 0
             return None
         self.state.related_row_idx = max(0, min(self.state.related_row_idx, len(rows) - 1))
-        if include_phonetic is None and not self.state.show_phonetic:
+        if include_phonetic is None and not self.state.show_phonetic and self.state.panel_focus != "variants":
             self._set_panel_focus_from_related_row(detail, self.state.related_row_idx)
         row = rows[self.state.related_row_idx]
         self.state.related_col_idx = max(0, min(self.state.related_col_idx, len(row) - 1))
@@ -1694,7 +1694,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.state.related_row_idx = (self.state.related_row_idx + delta) % len(rows)
-        if not self.state.show_phonetic:
+        if not self.state.show_phonetic and self.state.panel_focus != "variants":
             self._set_panel_focus_from_related_row(detail, self.state.related_row_idx)
         row = rows[self.state.related_row_idx]
         self.state.related_col_idx = min(self.state.related_col_idx, len(row) - 1)
@@ -1716,7 +1716,7 @@ class KanjiGuiWindow(QMainWindow):
             self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.state.related_row_idx = max(0, min(self.state.related_row_idx, len(rows) - 1))
-        if not self.state.show_phonetic:
+        if not self.state.show_phonetic and self.state.panel_focus != "variants":
             self._set_panel_focus_from_related_row(detail, self.state.related_row_idx)
         row = rows[self.state.related_row_idx]
         if len(row) <= 1:
