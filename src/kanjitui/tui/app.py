@@ -989,17 +989,21 @@ class TuiApp:
         rows = db_query.get_sentences(self.conn, cp, limit=sentence_limit, langs=sentence_langs)
         return tuple(rows)
 
-    def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
-        rows: list[list[int]] = []
+    def _phonetic_overlay_rows(self, cp: int) -> list[tuple[int, str, str, str | None]]:
+        rows: list[tuple[int, str, str, str | None]] = []
         seen: set[int] = set()
-        for member_cp, _member_ch, _key, _pinyin_marked, _pinyin_numbered in db_query.get_phonetic_series(
+        for member_cp, member_ch, key, pinyin_marked, pinyin_numbered in db_query.get_phonetic_series(
             self.conn, cp, limit=120
         ):
             if member_cp == cp or member_cp in seen:
                 continue
             seen.add(member_cp)
-            rows.append([member_cp])
+            pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(pinyin_numbered or "")
+            rows.append((member_cp, member_ch, key, pinyin or None))
         return rows
+
+    def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
+        return [[member_cp] for member_cp, _member_ch, _key, _pinyin in self._phonetic_overlay_rows(cp)]
 
     def _related_rows_for_detail(self, detail: dict, include_phonetic: bool | None = None) -> list[list[int]]:
         cp = int(detail["cp"])
@@ -2898,7 +2902,7 @@ class TuiApp:
         box_w = w - 2
         self._draw_box(stdscr, top, left, box_h, box_w, title="Phonetic Series", accent=True)
         self._safe_add(stdscr, top + 1, left + 2, "s closes overlay")
-        series_rows = db_query.get_phonetic_series(self.conn, cp, limit=120)
+        series_rows = self._phonetic_overlay_rows(cp)
         if not series_rows:
             hint = "(no phonetic series rows)"
             if self.derived_counts.get("phonetic_series", 0) == 0:
@@ -2909,10 +2913,7 @@ class TuiApp:
         start, end = visible_window(self.related_row_idx, len(series_rows), max_rows)
         for offset, row in enumerate(series_rows[start:end]):
             idx = start + offset
-            member_cp, member_ch, key, pinyin_marked, pinyin_numbered = row
-            pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(
-                pinyin_numbered
-            )
+            member_cp, member_ch, key, pinyin = row
             marker = "▶" if idx == self.related_row_idx else " "
             text = f"{marker} {idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             if pinyin:

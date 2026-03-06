@@ -662,6 +662,33 @@ def test_variants_focus_not_overridden_by_related_sync(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_phonetic_overlay_rows_match_navigation_rows(tmp_path: Path, monkeypatch) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        cp = app.current_cp or 0x4E0D
+
+        def fake_phonetic(_conn, _cp, limit=120):
+            _ = limit
+            return [
+                (cp, chr(cp), "SELF", None, None),  # should be excluded
+                (0x6F22, "漢", "K1", "hàn", "han4"),
+                (0x6F22, "漢", "K1DUP", "hàn", "han4"),  # duplicate cp should be deduped
+                (0x89D2, "角", "K2", None, "jiao3"),
+            ]
+
+        monkeypatch.setattr("kanjitui.tui.app.db_query.get_phonetic_series", fake_phonetic)
+
+        overlay_rows = app._phonetic_overlay_rows(cp)
+        nav_rows = app._phonetic_related_rows(cp)
+        assert [row[0] for row in overlay_rows] == [row[0] for row in nav_rows]
+        assert [row[0] for row in overlay_rows] == [0x6F22, 0x89D2]
+        assert overlay_rows[1][3] == "jiǎo"
+    finally:
+        conn.close()
+
+
 def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)

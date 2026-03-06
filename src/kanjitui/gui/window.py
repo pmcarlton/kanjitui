@@ -154,8 +154,12 @@ class LiveTextDialog(QDialog):
         bar = self.text.verticalScrollBar()
         prev_scroll = bar.value()
         if html_lines:
-            body = "<br/>".join(html_lines)
-            payload = f"<pre style=\"margin:0;\">{body}</pre>"
+            html_rows = "".join(f"<div>{row}</div>" for row in html_lines)
+            payload = (
+                "<div style=\"margin:0; white-space:pre;\">"
+                f"{html_rows}"
+                "</div>"
+            )
             if payload != self._last_html_text:
                 self.text.setHtml(payload)
                 self._last_html_text = payload
@@ -168,7 +172,8 @@ class LiveTextDialog(QDialog):
                 self._last_html_text = ""
 
         if auto_follow_selection and selected_line is not None:
-            block = self.text.document().findBlockByNumber(max(0, selected_line))
+            target_line = max(0, min(selected_line, max(0, len(lines) - 1)))
+            block = self.text.document().findBlockByNumber(target_line)
             if block.isValid():
                 cursor = QTextCursor(block)
                 self.text.setTextCursor(cursor)
@@ -1642,17 +1647,21 @@ class KanjiGuiWindow(QMainWindow):
         rows = db_query.get_sentences(self.state.conn, cp, limit=sent_limit, langs=langs)
         return rows
 
-    def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
-        rows: list[list[int]] = []
+    def _phonetic_overlay_rows(self, cp: int) -> list[tuple[int, str, str, str | None]]:
+        rows: list[tuple[int, str, str, str | None]] = []
         seen: set[int] = set()
-        for member_cp, _member_ch, _key, _pinyin_marked, _pinyin_numbered in db_query.get_phonetic_series(
+        for member_cp, member_ch, key, pinyin_marked, pinyin_numbered in db_query.get_phonetic_series(
             self.state.conn, cp, limit=120
         ):
             if member_cp == cp or member_cp in seen:
                 continue
             seen.add(member_cp)
-            rows.append([member_cp])
+            pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(pinyin_numbered or "")
+            rows.append((member_cp, member_ch, key, pinyin or None))
         return rows
+
+    def _phonetic_related_rows(self, cp: int) -> list[list[int]]:
+        return [[member_cp] for member_cp, _member_ch, _key, _pinyin in self._phonetic_overlay_rows(cp)]
 
     def _related_rows_for_detail(self, detail: dict, include_phonetic: bool | None = None) -> list[list[int]]:
         cp = int(detail["cp"])
@@ -2034,11 +2043,10 @@ class KanjiGuiWindow(QMainWindow):
             close_keys={"c", "C"},
         )
 
-        ph = db_query.get_phonetic_series(self.state.conn, cp, limit=120)
+        ph = self._phonetic_overlay_rows(cp)
         ph_lines: list[str] = []
         ph_html_lines: list[str] = []
-        for idx, (member_cp, member_ch, key, pinyin_marked, pinyin_numbered) in enumerate(ph):
-            pinyin = pinyin_marked or search_normalize.pinyin_numbered_to_marked(pinyin_numbered)
+        for idx, (member_cp, member_ch, key, pinyin) in enumerate(ph):
             marker = "▶" if idx == self.state.related_row_idx else " "
             row = f"{marker} {idx + 1}. {member_ch} U+{member_cp:04X} [{key}]"
             if pinyin:
