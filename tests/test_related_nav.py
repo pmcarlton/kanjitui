@@ -54,5 +54,6 @@ def test_build_related_rows_layout_includes_sentence_rows() -> None:
         allowed=None,
     )
     assert layout.rows
+    assert len(layout.row_panels) == len(layout.rows)
     assert len(layout.sentence_row_indexes) == 2
     assert any(idx is not None for idx in layout.sentence_row_indexes)

@@ -1450,6 +1450,20 @@ class KanjiGuiWindow(QMainWindow):
             self.state.move_end()
         self.refresh_view()
 
+    def _cycle_panel_focus_and_sync_related(self) -> None:
+        self.state.toggle_focus()
+        if self.state.show_phonetic:
+            return
+        if self.state.panel_focus not in {"jp", "cn", "sentences"}:
+            return
+        detail = self._current_detail()
+        if detail is None:
+            return
+        first_row = self._first_row_index_for_panel(detail, self.state.panel_focus)
+        if first_row is not None:
+            self.state.related_row_idx = first_row
+            self.state.related_col_idx = 0
+
     def _focus_style(self, active: bool) -> str:
         if active:
             return (
@@ -1504,9 +1518,9 @@ class KanjiGuiWindow(QMainWindow):
             if cp not in selectable_set:
                 parts.append(escaped)
                 continue
-            style = "color:#00a0ff;text-decoration:underline;"
+            style = "text-decoration:underline;"
             if selected_cp is not None and cp == selected_cp:
-                style += "font-weight:700;background:#dff3ff;"
+                style += "color:#00a0ff;font-weight:700;"
             parts.append(f'<span style="{style}">{escaped}</span>')
         return "".join(parts)
 
@@ -1559,6 +1573,8 @@ class KanjiGuiWindow(QMainWindow):
     ) -> RelatedRowsLayout:
         if sentence_rows is None:
             sentence_rows = self._sentence_rows_for_detail(detail)
+        jp_words = detail["jp_words"] if self.state.show_jp else []
+        cn_words = detail["cn_words"] if self.state.show_cn else []
         sentence_texts = (
             [text for _lang, text, _reading, _gloss, _source, _license, _rank in sentence_rows]
             if self.state.show_sentences
@@ -1566,8 +1582,8 @@ class KanjiGuiWindow(QMainWindow):
         )
         return build_related_rows_layout(
             current_cp=int(detail["cp"]),
-            jp_words=detail["jp_words"],
-            cn_words=detail["cn_words"],
+            jp_words=jp_words,
+            cn_words=cn_words,
             sentence_texts=sentence_texts,
             allowed=None,
         )
@@ -1614,6 +1630,34 @@ class KanjiGuiWindow(QMainWindow):
             rows.append(row)
         return rows
 
+    def _panel_for_related_row(self, detail: dict, row_idx: int) -> str | None:
+        layout = self._main_related_layout(detail)
+        if row_idx < 0 or row_idx >= len(layout.row_panels):
+            return None
+        panel = layout.row_panels[row_idx]
+        if panel in {"jp", "cn", "sentences"}:
+            return panel
+        return None
+
+    def _set_panel_focus_from_related_row(self, detail: dict, row_idx: int) -> None:
+        if self.state.show_phonetic:
+            return
+        panel = self._panel_for_related_row(detail, row_idx)
+        if panel is None:
+            return
+        self.state.panel_focus = panel
+        if self.state.panel_focus in ("jp", "cn") and self.state.focus != self.state.panel_focus:
+            self.state.focus = self.state.panel_focus
+            if ORDERINGS[self.state.ordering_idx] == "reading" or self.state.hide_no_reading:
+                self.state.refresh_ordering()
+
+    def _first_row_index_for_panel(self, detail: dict, panel: str) -> int | None:
+        layout = self._main_related_layout(detail)
+        for idx, row_panel in enumerate(layout.row_panels):
+            if row_panel == panel:
+                return idx
+        return None
+
     def _selected_related_cp_for_detail(self, detail: dict, include_phonetic: bool | None = None) -> int | None:
         rows = self._related_rows_for_detail(detail, include_phonetic=include_phonetic)
         if not rows:
@@ -1621,6 +1665,8 @@ class KanjiGuiWindow(QMainWindow):
             self.state.related_col_idx = 0
             return None
         self.state.related_row_idx = max(0, min(self.state.related_row_idx, len(rows) - 1))
+        if include_phonetic is None and not self.state.show_phonetic:
+            self._set_panel_focus_from_related_row(detail, self.state.related_row_idx)
         row = rows[self.state.related_row_idx]
         self.state.related_col_idx = max(0, min(self.state.related_col_idx, len(row) - 1))
         return row[self.state.related_col_idx]
@@ -1633,9 +1679,11 @@ class KanjiGuiWindow(QMainWindow):
         if not rows:
             self.state.related_row_idx = 0
             self.state.related_col_idx = 0
-            self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN words"
+            self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.state.related_row_idx = (self.state.related_row_idx + delta) % len(rows)
+        if not self.state.show_phonetic:
+            self._set_panel_focus_from_related_row(detail, self.state.related_row_idx)
         row = rows[self.state.related_row_idx]
         self.state.related_col_idx = min(self.state.related_col_idx, len(row) - 1)
         selected = row[self.state.related_col_idx]
@@ -1653,9 +1701,11 @@ class KanjiGuiWindow(QMainWindow):
         if not rows:
             self.state.related_row_idx = 0
             self.state.related_col_idx = 0
-            self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN words"
+            self.state.message = "No related glyphs in phonetic series" if self.state.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.state.related_row_idx = max(0, min(self.state.related_row_idx, len(rows) - 1))
+        if not self.state.show_phonetic:
+            self._set_panel_focus_from_related_row(detail, self.state.related_row_idx)
         row = rows[self.state.related_row_idx]
         if len(row) <= 1:
             self.state.related_col_idx = 0
@@ -2577,7 +2627,7 @@ class KanjiGuiWindow(QMainWindow):
             else:
                 self.state.move_prev()
         elif key == Qt.Key.Key_Tab:
-            self.state.toggle_focus()
+            self._cycle_panel_focus_and_sync_related()
         elif text in ("o", "O"):
             self.state.cycle_ordering()
         elif text == "f":

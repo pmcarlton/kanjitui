@@ -901,6 +901,17 @@ class TuiApp:
             self.focus = self.panel_focus
             if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
                 self._refresh_ordering()
+        if self.panel_focus in {"jp", "cn", "sentences"} and not self.show_phonetic:
+            cp = self.current_cp
+            if cp is not None:
+                try:
+                    detail = db_query.get_char_detail(self.conn, cp)
+                    first_row = self._first_row_index_for_panel(detail, self.panel_focus)
+                    if first_row is not None:
+                        self.related_row_idx = first_row
+                        self.related_col_idx = 0
+                except Exception:
+                    pass
         self.message = f"Panel focus: {self.panel_focus}"
 
     def _variant_data_for_current(self) -> tuple[dict, list[VariantTarget]]:
@@ -952,6 +963,8 @@ class TuiApp:
     ) -> RelatedRowsLayout:
         if sentence_rows is None:
             sentence_rows = self._sentence_rows_for_detail(detail)
+        jp_words = detail["jp_words"] if self.show_jp else []
+        cn_words = detail["cn_words"] if self.show_cn else []
         sentence_texts = (
             [text for _lang, text, _reading, _gloss, _source, _license, _rank in sentence_rows]
             if self.show_sentences
@@ -959,8 +972,8 @@ class TuiApp:
         )
         return build_related_rows_layout(
             current_cp=int(detail["cp"]),
-            jp_words=detail["jp_words"],
-            cn_words=detail["cn_words"],
+            jp_words=jp_words,
+            cn_words=cn_words,
             sentence_texts=sentence_texts,
             allowed=None,
         )
@@ -1007,6 +1020,34 @@ class TuiApp:
             rows.append(row)
         return rows
 
+    def _panel_for_related_row(self, detail: dict, row_idx: int) -> str | None:
+        layout = self._main_related_layout(detail)
+        if row_idx < 0 or row_idx >= len(layout.row_panels):
+            return None
+        panel = layout.row_panels[row_idx]
+        if panel in {"jp", "cn", "sentences"}:
+            return panel
+        return None
+
+    def _set_panel_focus_from_related_row(self, detail: dict, row_idx: int) -> None:
+        if self.show_phonetic:
+            return
+        panel = self._panel_for_related_row(detail, row_idx)
+        if panel is None:
+            return
+        self.panel_focus = panel
+        if self.panel_focus in ("jp", "cn") and self.focus != self.panel_focus:
+            self.focus = self.panel_focus
+            if ORDERINGS[self.ordering_idx] == "reading" or self.hide_no_reading:
+                self._refresh_ordering()
+
+    def _first_row_index_for_panel(self, detail: dict, panel: str) -> int | None:
+        layout = self._main_related_layout(detail)
+        for idx, row_panel in enumerate(layout.row_panels):
+            if row_panel == panel:
+                return idx
+        return None
+
     def _selected_related_cp(self, detail: dict, include_phonetic: bool | None = None) -> int | None:
         rows = self._related_rows_for_detail(detail, include_phonetic=include_phonetic)
         if not rows:
@@ -1014,6 +1055,8 @@ class TuiApp:
             self.related_col_idx = 0
             return None
         self.related_row_idx = max(0, min(self.related_row_idx, len(rows) - 1))
+        if include_phonetic is None and not self.show_phonetic:
+            self._set_panel_focus_from_related_row(detail, self.related_row_idx)
         row = rows[self.related_row_idx]
         self.related_col_idx = max(0, min(self.related_col_idx, len(row) - 1))
         return row[self.related_col_idx]
@@ -1033,6 +1076,8 @@ class TuiApp:
             self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.related_row_idx = (self.related_row_idx + delta) % len(rows)
+        if not self.show_phonetic:
+            self._set_panel_focus_from_related_row(detail, self.related_row_idx)
         row = rows[self.related_row_idx]
         self.related_col_idx = min(self.related_col_idx, len(row) - 1)
         target = row[self.related_col_idx]
@@ -1057,6 +1102,8 @@ class TuiApp:
             self.message = "No related glyphs in phonetic series" if self.show_phonetic else "No related glyphs in JP/CN/Sentences"
             return False
         self.related_row_idx = max(0, min(self.related_row_idx, len(rows) - 1))
+        if not self.show_phonetic:
+            self._set_panel_focus_from_related_row(detail, self.related_row_idx)
         row = rows[self.related_row_idx]
         if len(row) <= 1:
             self.related_col_idx = 0
@@ -2300,9 +2347,9 @@ class TuiApp:
             cp = ord(ch)
             attr = 0
             if cp in selectable_cps:
-                attr = self._accent_attr | curses.A_UNDERLINE
+                attr = curses.A_UNDERLINE
                 if selected_cp is not None and cp == selected_cp:
-                    attr |= curses.A_BOLD
+                    attr = self._accent_attr | curses.A_UNDERLINE | curses.A_BOLD
             try:
                 stdscr.addstr(y, cur_x, ch, attr)
             except curses.error:

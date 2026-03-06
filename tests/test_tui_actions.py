@@ -576,6 +576,67 @@ def test_sentence_rows_participate_in_related_selection_when_panel_visible(tmp_p
         conn.close()
 
 
+def test_related_rows_exclude_hidden_panels_and_focus_follows_selection(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        if 0x4E0D in app.ordered_cps:
+            app.pos = app.ordered_cps.index(0x4E0D)
+        detail = db_query.get_char_detail(app.conn, app.current_cp or 0x4E0D)
+
+        app.show_jp = True
+        app.show_cn = True
+        app.show_sentences = True
+        all_rows = app._related_rows_for_detail(detail, include_phonetic=False)
+        assert all_rows
+
+        app.show_cn = False
+        rows_no_cn = app._related_rows_for_detail(detail, include_phonetic=False)
+        assert len(rows_no_cn) <= len(all_rows)
+
+        app.show_jp = False
+        app.show_sentences = True
+        app.panel_focus = "sentences"
+        rows_sent_only = app._related_rows_for_detail(detail, include_phonetic=False)
+        assert len(rows_sent_only) <= len(rows_no_cn)
+        if rows_sent_only:
+            app.related_row_idx = 0
+            app.related_col_idx = 0
+            assert app._move_related_selection_vertical(+1) is True
+            assert app.panel_focus == "sentences"
+    finally:
+        conn.close()
+
+
+def test_tab_focus_moves_related_indicator_to_top_of_panel(tmp_path: Path) -> None:
+    db_path = _build_fixture_db(tmp_path)
+    conn = connect(db_path)
+    try:
+        app = TuiApp(conn)
+        if 0x4E0D in app.ordered_cps:
+            app.pos = app.ordered_cps.index(0x4E0D)
+        app.show_jp = True
+        app.show_cn = True
+        app.show_sentences = True
+        detail = db_query.get_char_detail(app.conn, app.current_cp or 0x4E0D)
+
+        app.panel_focus = "jp"
+        app.related_row_idx = 999
+        app.related_col_idx = 0
+        app._cycle_panel_focus()  # cn
+        cn_top = app._first_row_index_for_panel(detail, "cn")
+        if cn_top is not None:
+            assert app.related_row_idx == cn_top
+
+        app._cycle_panel_focus()  # sentences
+        sent_top = app._first_row_index_for_panel(detail, "sentences")
+        if sent_top is not None:
+            assert app.related_row_idx == sent_top
+    finally:
+        conn.close()
+
+
 def test_filter_overlay_applies_reading_filter(tmp_path: Path) -> None:
     db_path = _build_fixture_db(tmp_path)
     conn = connect(db_path)

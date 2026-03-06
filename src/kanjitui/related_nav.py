@@ -99,6 +99,7 @@ def build_related_rows(
 @dataclass(frozen=True)
 class RelatedRowsLayout:
     rows: list[list[int]]
+    row_panels: list[str]
     jp_row_indexes: list[int | None]
     cn_row_indexes: list[int | None]
     sentence_row_indexes: list[int | None]
@@ -112,12 +113,13 @@ def build_related_rows_layout(
     allowed: set[int] | None = None,
 ) -> RelatedRowsLayout:
     rows: list[list[int]] = []
+    row_panels: list[str] = []
     seen: set[int] = set()
     jp_row_indexes: list[int | None] = []
     cn_row_indexes: list[int | None] = []
     sentence_row_indexes: list[int | None] = []
 
-    def add_row(values: list[int]) -> int | None:
+    def add_row(values: list[int], panel: str) -> int | None:
         row = [cp for cp in values if cp != current_cp]
         if allowed is not None:
             row = [cp for cp in row if cp in allowed]
@@ -127,19 +129,23 @@ def build_related_rows_layout(
             return None
         seen.update(row)
         rows.append(row)
+        row_panels.append(panel)
         return len(rows) - 1
 
     for word, _kana, _gloss, _rank in jp_words:
-        jp_row_indexes.append(add_row(jp_word_related_cps(current_cp, word, allowed=allowed)))
+        jp_row_indexes.append(add_row(jp_word_related_cps(current_cp, word, allowed=allowed), "jp"))
 
     for trad, simp, _marked, _numbered, _gloss, _rank in cn_words:
-        cn_row_indexes.append(add_row(cn_word_related_cps(current_cp, trad, simp, allowed=allowed)))
+        cn_row_indexes.append(add_row(cn_word_related_cps(current_cp, trad, simp, allowed=allowed), "cn"))
 
     for sentence_text in sentence_texts or ():
-        sentence_row_indexes.append(add_row(_ordered_unique_cps_from_texts([sentence_text], current_cp)))
+        sentence_row_indexes.append(
+            add_row(_ordered_unique_cps_from_texts([sentence_text], current_cp), "sentences")
+        )
 
     return RelatedRowsLayout(
         rows=rows,
+        row_panels=row_panels,
         jp_row_indexes=jp_row_indexes,
         cn_row_indexes=cn_row_indexes,
         sentence_row_indexes=sentence_row_indexes,
