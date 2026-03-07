@@ -97,7 +97,10 @@
       <section id="quickstart" class="panel reveal">
         <h2>Quick Start</h2>
         <h3>Check <a href=https://github.com/pmcarlton/kanjitui/releases>releases</a> for OSX, or:</h3>
-        <pre><code>pip install -e .[gui]
+        <pre><code>
+          git clone https://github.com/pmcarlton/kanjitui.git
+          cd kanjitui
+          pip install -e .[gui]
 make fetch-data
 make build-db
 kanjitui --db data/db.sqlite
